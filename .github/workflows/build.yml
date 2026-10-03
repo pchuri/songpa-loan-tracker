@@ -28,8 +28,9 @@ jobs:
         run: |
           SHA="${{ github.sha }}"
           NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-          printf 'BUILD_SHA = "%s"\nBUILD_TIME = "%s"\n' "$SHA" "$NOW" > src/_version.py
-          printf '{"sha":"%s","time":"%s"}\n' "$SHA" "$NOW" > version.json
+          VERSION="$(tr -d '[:space:]' < VERSION)"
+          printf 'APP_VERSION = "%s"\nBUILD_SHA = "%s"\nBUILD_TIME = "%s"\n' "$VERSION" "$SHA" "$NOW" > src/_version.py
+          printf '{"version":"%s","sha":"%s","time":"%s"}\n' "$VERSION" "$SHA" "$NOW" > version.json
           if [ -n "$UPDATER_TOKEN" ]; then
             printf 'GITHUB_TOKEN = "%s"\n' "$UPDATER_TOKEN" > src/_updater_token.py
           fi
@@ -71,8 +72,9 @@ jobs:
         run: |
           SHA="${{ github.sha }}"
           NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-          printf 'BUILD_SHA = "%s"\nBUILD_TIME = "%s"\n' "$SHA" "$NOW" > src/_version.py
-          printf '{"sha":"%s","time":"%s"}\n' "$SHA" "$NOW" > version.json
+          VERSION="$(tr -d '[:space:]' < VERSION)"
+          printf 'APP_VERSION = "%s"\nBUILD_SHA = "%s"\nBUILD_TIME = "%s"\n' "$VERSION" "$SHA" "$NOW" > src/_version.py
+          printf '{"version":"%s","sha":"%s","time":"%s"}\n' "$VERSION" "$SHA" "$NOW" > version.json
           if [ -n "$UPDATER_TOKEN" ]; then
             printf 'GITHUB_TOKEN = "%s"\n' "$UPDATER_TOKEN" > src/_updater_token.py
           fi

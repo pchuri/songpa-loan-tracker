@@ -26,31 +26,63 @@ def test_find_asset():
     assert updater.find_asset({}, "version.json") is None
 
 
-def test_check_for_update_none_when_same_sha(monkeypatch, tmp_path):
-    monkeypatch.setattr(updater, "_build_sha", lambda: "abc123")
-    monkeypatch.setattr(
-        updater,
-        "_remote_version_info",
-        lambda: ({"sha": "abc123"}, {"name": "songpa-loan-tracker.exe"}, None),
+def _remote(version, asset=None):
+    return (
+        {"version": version, "sha": "s-" + version},
+        asset if asset is not None else {"name": "songpa-loan-tracker.exe"},
+        None,
     )
+
+
+def test_check_for_update_none_when_same_version(monkeypatch):
+    monkeypatch.setattr(updater, "_build_version", lambda: "1.0.0")
+    monkeypatch.setattr(updater, "_remote_version_info", lambda: _remote("1.0.0"))
     assert updater.check_for_update() is None
 
 
-def test_check_for_update_returns_assets_when_sha_differs(monkeypatch):
-    monkeypatch.setattr(updater, "_build_sha", lambda: "old-sha")
+def test_check_for_update_none_when_remote_older(monkeypatch):
+    monkeypatch.setattr(updater, "_build_version", lambda: "1.2.0")
+    monkeypatch.setattr(updater, "_remote_version_info", lambda: _remote("1.1.0"))
+    assert updater.check_for_update() is None
+
+
+def test_check_for_update_returns_assets_when_version_newer(monkeypatch):
+    monkeypatch.setattr(updater, "_build_version", lambda: "1.0.0")
     exe_asset = {"name": "songpa-loan-tracker.exe", "url": "https://example/x"}
-    monkeypatch.setattr(
-        updater,
-        "_remote_version_info",
-        lambda: ({"sha": "new-sha"}, exe_asset, None),
-    )
+    monkeypatch.setattr(updater, "_remote_version_info", lambda: _remote("1.1.0", exe_asset))
     info, asset = updater.check_for_update()
-    assert info["sha"] == "new-sha"
+    assert info["version"] == "1.1.0"
     assert asset is exe_asset
 
 
-def test_check_for_update_none_on_network_error(monkeypatch):
+def test_check_for_update_falls_back_to_sha_without_version(monkeypatch):
+    # version이 없는 구 릴리스: sha 비교로 동작
+    monkeypatch.setattr(updater, "_build_version", lambda: "1.0.0")
     monkeypatch.setattr(updater, "_build_sha", lambda: "old-sha")
+    monkeypatch.setattr(
+        updater,
+        "_remote_version_info",
+        lambda: ({"sha": "old-sha"}, {"name": "songpa-loan-tracker.exe"}, None),
+    )
+    assert updater.check_for_update() is None
+    monkeypatch.setattr(
+        updater,
+        "_remote_version_info",
+        lambda: ({"sha": "new-sha"}, {"name": "songpa-loan-tracker.exe"}, None),
+    )
+    assert updater.check_for_update() is not None
+
+
+def test_is_newer():
+    assert updater.is_newer("1.1.0", "1.0.0") is True
+    assert updater.is_newer("1.0.0", "1.0.0") is False
+    assert updater.is_newer("1.0.0", "1.1.0") is False
+    assert updater.is_newer("1.0.10", "1.0.9") is True
+    assert updater.is_newer("2.0", "1.9.9") is True
+
+
+def test_check_for_update_none_on_network_error(monkeypatch):
+    monkeypatch.setattr(updater, "_build_version", lambda: "1.0.0")
 
     def boom():
         raise OSError("no network")
@@ -70,6 +102,8 @@ def test_build_updater_script(tmp_path):
     assert 'move /Y "%NEW%" "%EXE%"' in script
     assert 'start "" "%EXE%"' in script
     assert 'del "%~f0"' in script  # 스크립트 자가 삭제
+    assert "taskkill /F /PID" in script  # 타임아웃 시 강제 종료
+    assert "TRIES" in script  # 대기 타임아웃 카운터
 
 
 def test_apply_update_writes_bat_and_downloads(monkeypatch, tmp_path):
@@ -99,3 +133,32 @@ def test_apply_update_rejects_empty_download(monkeypatch, tmp_path):
     monkeypatch.setattr(updater, "_download", lambda url, dest, progress_cb=None: Path(dest).write_bytes(b""))
     with pytest.raises(RuntimeError):
         updater.apply_update({"url": "https://example/x"})
+
+
+def test_clean_stale_update_files_removes_leftovers(monkeypatch, tmp_path):
+    exe = tmp_path / "songpa-loan-tracker.exe"
+    exe.write_bytes(b"x")
+    stale_new = tmp_path / "songpa-loan-tracker.new.exe"
+    stale_new.write_bytes(b"y")
+    stale_bat = tmp_path / updater.UPDATER_BAT_NAME
+    stale_bat.write_text("x")
+    keep = tmp_path / "notes.txt"
+    keep.write_text("keep me")
+
+    monkeypatch.setattr(updater.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(updater.sys, "platform", "win32")
+    monkeypatch.setattr(updater, "exe_path", lambda: exe)
+
+    updater.clean_stale_update_files()
+
+    assert not stale_new.exists()
+    assert not stale_bat.exists()
+    assert exe.exists()
+    assert keep.exists()
+
+
+def test_clean_stale_update_files_noop_when_not_frozen(monkeypatch, tmp_path):
+    monkeypatch.setattr(updater.sys, "frozen", False, raising=False)
+    # exe_path를 호출하지 않아야 한다 (호출되면 AttributeError)
+    monkeypatch.setattr(updater, "exe_path", lambda: (_ for _ in ()).throw(AssertionError()))
+    updater.clean_stale_update_files()  # 예외 없이 통과

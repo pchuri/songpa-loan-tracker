@@ -103,6 +103,9 @@ class MainWindow(QMainWindow):
             QTimer.singleShot(0, self._show_decrypt_failure_warning)
 
         # 자동 업데이트 확인 (Windows 빌드에서만 동작)
+        # 이전 업데이트 시도의 잔재가 있으면 먼저 치운다.
+        from src import updater as _updater_startup
+        _updater_startup.clean_stale_update_files()
         QTimer.singleShot(3000, self._check_for_updates)
 
     def _check_for_updates(self):
@@ -118,9 +121,14 @@ class MainWindow(QMainWindow):
         from src import updater
 
         version_info, exe_asset = result
+        remote_version = (version_info or {}).get("version")
         box = QMessageBox(self)
         box.setWindowTitle("업데이트")
-        box.setText("새 버전이 있습니다. 업데이트하고 다시 시작할까요?")
+        box.setText(
+            f"새 버전(v{remote_version})이 있습니다. 업데이트하고 다시 시작할까요?"
+            if remote_version
+            else "새 버전이 있습니다. 업데이트하고 다시 시작할까요?"
+        )
         update_btn = box.addButton("업데이트", QMessageBox.YesRole)
         box.addButton("나중에", QMessageBox.NoRole)
         box.setDefaultButton(update_btn)
