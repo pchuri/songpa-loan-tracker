@@ -1,0 +1,8 @@
+.venv/
+__pycache__/
+*.pyc
+dist/
+build/
+.env
+resources/doorae_report/
+.DS_Store
