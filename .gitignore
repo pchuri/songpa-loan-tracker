@@ -6,3 +6,7 @@ build/
 .env
 resources/doorae_report/
 .DS_Store
+
+# CI에서 빌드 시 생성 (자동 업데이트용)
+src/_version.py
+src/_updater_token.py

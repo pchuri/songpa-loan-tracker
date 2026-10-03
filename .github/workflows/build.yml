@@ -1,6 +1,8 @@
 name: build-desktop
 
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -19,6 +21,18 @@ jobs:
         run: |
           uv sync
           uv pip install pyinstaller
+      - name: Generate version info
+        shell: bash
+        env:
+          UPDATER_TOKEN: ${{ secrets.UPDATER_TOKEN }}
+        run: |
+          SHA="${{ github.sha }}"
+          NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          printf 'BUILD_SHA = "%s"\nBUILD_TIME = "%s"\n' "$SHA" "$NOW" > src/_version.py
+          printf '{"sha":"%s","time":"%s"}\n' "$SHA" "$NOW" > version.json
+          if [ -n "$UPDATER_TOKEN" ]; then
+            printf 'GITHUB_TOKEN = "%s"\n' "$UPDATER_TOKEN" > src/_updater_token.py
+          fi
       - name: Build (PyInstaller)
         run: uv run pyinstaller songpa-loan-tracker.spec
       # Artifact storage quota can block uploads for hours; the release
@@ -50,6 +64,18 @@ jobs:
         run: |
           uv sync
           uv pip install pyinstaller
+      - name: Generate version info
+        shell: bash
+        env:
+          UPDATER_TOKEN: ${{ secrets.UPDATER_TOKEN }}
+        run: |
+          SHA="${{ github.sha }}"
+          NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          printf 'BUILD_SHA = "%s"\nBUILD_TIME = "%s"\n' "$SHA" "$NOW" > src/_version.py
+          printf '{"sha":"%s","time":"%s"}\n' "$SHA" "$NOW" > version.json
+          if [ -n "$UPDATER_TOKEN" ]; then
+            printf 'GITHUB_TOKEN = "%s"\n' "$UPDATER_TOKEN" > src/_updater_token.py
+          fi
       - name: Build (PyInstaller)
         run: uv run pyinstaller --windowed --onefile --name songpa-loan-tracker src/main_app.py
       - name: Upload artifact
@@ -64,4 +90,4 @@ jobs:
         shell: bash
         run: |
           gh release create latest-build --prerelease --title "Latest build" --notes "Automated build" || true
-          gh release upload latest-build dist/songpa-loan-tracker.exe --clobber
+          gh release upload latest-build dist/songpa-loan-tracker.exe version.json --clobber

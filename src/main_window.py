@@ -22,7 +22,6 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QScrollArea,
-    QSystemTrayIcon,
     QTabWidget,
     QVBoxLayout,
     QWidget,
@@ -57,7 +56,6 @@ class MainWindow(QMainWindow):
         self.auto_refresh_interval = self.config_data.get("auto_refresh_interval", 0)
         self.auto_refresh_timer = None
         self.dark_mode = self.config_data.get("dark_mode", False)
-        self.tray_icon = None
         self._last_updated_labels = []
         self._refresh_buttons = []
 
@@ -98,12 +96,68 @@ class MainWindow(QMainWindow):
         self._setup_shortcuts()
         self._start_auto_refresh_timer()
         self._apply_theme()
-        self._setup_system_tray()
 
         if self.config_store.keychain_error:
             QTimer.singleShot(0, self._show_keychain_warning)
         elif self.config_store.decrypt_failed_users:
             QTimer.singleShot(0, self._show_decrypt_failure_warning)
+
+        # 자동 업데이트 확인 (Windows 빌드에서만 동작)
+        QTimer.singleShot(3000, self._check_for_updates)
+
+    def _check_for_updates(self):
+        from src import updater
+
+        if not updater.should_check():
+            return
+        self._update_checker = updater.UpdateChecker()
+        self._update_checker.update_found.connect(self._on_update_found)
+        self._update_checker.start()
+
+    def _on_update_found(self, result):
+        from src import updater
+
+        version_info, exe_asset = result
+        box = QMessageBox(self)
+        box.setWindowTitle("업데이트")
+        box.setText("새 버전이 있습니다. 업데이트하고 다시 시작할까요?")
+        update_btn = box.addButton("업데이트", QMessageBox.YesRole)
+        box.addButton("나중에", QMessageBox.NoRole)
+        box.setDefaultButton(update_btn)
+        box.exec()
+        if box.clickedButton() is not update_btn:
+            return
+        self._download_and_apply_update(exe_asset)
+
+    def _download_and_apply_update(self, exe_asset):
+        from PySide6.QtCore import Qt
+        from PySide6.QtWidgets import QProgressDialog
+
+        from src import updater
+
+        progress = QProgressDialog("업데이트 다운로드 중...", "취소", 0, 100, self)
+        progress.setWindowModality(Qt.WindowModal)
+        progress.show()
+
+        def on_progress(done, total):
+            if progress.wasCanceled():
+                raise updater.DownloadCancelled()
+            if total:
+                progress.setValue(int(done * 100 / total))
+            QApplication.processEvents()
+
+        try:
+            bat_path = updater.apply_update(exe_asset, progress_cb=on_progress)
+        except updater.DownloadCancelled:
+            progress.close()
+            return
+        except Exception as exc:
+            progress.close()
+            QMessageBox.warning(self, "업데이트 실패", f"다운로드 중 오류가 발생했습니다.\n{exc}")
+            return
+        progress.close()
+        updater.launch_updater(bat_path)
+        QApplication.instance().quit()
 
     def _show_decrypt_failure_warning(self):
         names = ", ".join(self.config_store.decrypt_failed_users)
@@ -883,47 +937,6 @@ class MainWindow(QMainWindow):
         body = DARK_STYLESHEET if self.dark_mode else LIGHT_STYLESHEET
         app.setStyleSheet(build_font_rule() + body)
 
-    def _setup_system_tray(self):
-        if not QSystemTrayIcon.isSystemTrayAvailable():
-            return
-        self.tray_icon = QSystemTrayIcon(self)
-        icon_path = Path(__file__).resolve().parents[1] / "resources" / "songpa-loan-tracker.icns"
-        if not icon_path.exists():
-            icon_path = Path(__file__).resolve().parents[1] / "songpa-loan-tracker.png"
-        if icon_path.exists():
-            self.tray_icon.setIcon(QIcon(str(icon_path)))
-        else:
-            self.tray_icon.setIcon(self.style().standardIcon(self.style().StandardPixmap.SP_ComputerIcon))
-
-        tray_menu = QMenu()
-        show_action = QAction("창 표시", self)
-        show_action.triggered.connect(self.show)
-        tray_menu.addAction(show_action)
-        refresh_action = QAction("새로고침", self)
-        refresh_action.triggered.connect(self.refresh_status)
-        tray_menu.addAction(refresh_action)
-        tray_menu.addSeparator()
-        quit_action = QAction("종료", self)
-        quit_action.triggered.connect(QApplication.quit)
-        tray_menu.addAction(quit_action)
-        self.tray_icon.setContextMenu(tray_menu)
-        self.tray_icon.activated.connect(self._tray_icon_activated)
-        self.tray_icon.show()
-
-    def _tray_icon_activated(self, reason):
-        if reason == QSystemTrayIcon.ActivationReason.DoubleClick:
-            self.show()
-            self.activateWindow()
-
     def closeEvent(self, event):
-        if self.tray_icon and self.tray_icon.isVisible():
-            event.ignore()
-            self.hide()
-            self.tray_icon.showMessage(
-                "송파도서관 대출현황",
-                "앱이 시스템 트레이로 최소화되었습니다.",
-                QSystemTrayIcon.MessageIcon.Information,
-                2000
-            )
-        else:
-            event.accept()
+        # 트레이 상주 없이 일반 앱처럼 종료한다.
+        event.accept()
