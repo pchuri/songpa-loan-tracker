@@ -60,7 +60,7 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name='JenaonBot',
+    name='songpa-loan-tracker',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -81,14 +81,14 @@ coll = COLLECT(
     strip=False,
     upx=True,
     upx_exclude=[],
-    name='JenaonBot',
+    name='songpa-loan-tracker',
 )
 
 app = BUNDLE(
     coll,
-    name='JenaonBot.app',
-    icon='resources/jenaonbot.icns',
-    bundle_identifier='com.jenaonbot.desktop',
+    name='songpa-loan-tracker.app',
+    icon='resources/songpa-loan-tracker.icns',
+    bundle_identifier='com.pchuri.songpa-loan-tracker',
     info_plist={
         'NSPrincipalClass': 'NSApplication',
         'NSHighResolutionCapable': 'True',

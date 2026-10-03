@@ -20,23 +20,23 @@ jobs:
           uv sync
           uv pip install pyinstaller
       - name: Build (PyInstaller)
-        run: uv run pyinstaller JenaonBot.spec
+        run: uv run pyinstaller songpa-loan-tracker.spec
       # Artifact storage quota can block uploads for hours; the release
       # asset below is the reliable delivery path.
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         continue-on-error: true
         with:
-          name: JenaonBot-macos
-          path: dist/JenaonBot.app
+          name: songpa-loan-tracker-macos
+          path: dist/songpa-loan-tracker.app
       - name: Package app bundle
-        run: ditto -c -k --keepParent dist/JenaonBot.app dist/JenaonBot-macos.zip
+        run: ditto -c -k --keepParent dist/songpa-loan-tracker.app dist/songpa-loan-tracker-macos.zip
       - name: Upload to latest-build release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create latest-build --prerelease --title "Latest build" --notes "Automated build" || true
-          gh release upload latest-build dist/JenaonBot-macos.zip --clobber
+          gh release upload latest-build dist/songpa-loan-tracker-macos.zip --clobber
 
   build-windows:
     runs-on: windows-latest
@@ -51,17 +51,17 @@ jobs:
           uv sync
           uv pip install pyinstaller
       - name: Build (PyInstaller)
-        run: uv run pyinstaller --windowed --onefile --name JenaonBot src/main_app.py
+        run: uv run pyinstaller --windowed --onefile --name songpa-loan-tracker src/main_app.py
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         continue-on-error: true
         with:
-          name: JenaonBot-windows
-          path: dist/JenaonBot.exe
+          name: songpa-loan-tracker-windows
+          path: dist/songpa-loan-tracker.exe
       - name: Upload to latest-build release
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           gh release create latest-build --prerelease --title "Latest build" --notes "Automated build" || true
-          gh release upload latest-build dist/JenaonBot.exe --clobber
+          gh release upload latest-build dist/songpa-loan-tracker.exe --clobber

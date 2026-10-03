@@ -262,7 +262,7 @@ def test_rotated_master_key_flags_users_for_reentry(tmp_path, fake_keyring):
     """마스터키가 바뀌어 복호화가 불가능하면 비밀번호는 비우되 재입력 대상으로 알린다."""
     config = make_encrypted_config(Fernet.generate_key(), "secret")
     store = make_store(tmp_path, config)
-    fake_keyring["store"][("jenaonbot", "__master__")] = Fernet.generate_key().decode()
+    fake_keyring["store"][("songpa-loan-tracker", "__master__")] = Fernet.generate_key().decode()
 
     data = store.load()
 
@@ -282,3 +282,36 @@ def test_keyring_denied_is_not_flagged_as_decrypt_failure(tmp_path, monkeypatch)
 
     assert store.keychain_error
     assert store.decrypt_failed_users == []
+
+
+def test_legacy_jenaonbot_config_is_migrated(tmp_path, monkeypatch, fake_keyring):
+    """이전 이름(jenaonbot) 시절의 설정·마스터키가 새 위치로 옮겨진다."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    legacy_dir = tmp_path / ".jenaonbot"
+    legacy_dir.mkdir()
+    config = {"env": {}, "users": [{"userId": "u1", "encrypted_password": "x"}]}
+    (legacy_dir / "config.json").write_text(json.dumps(config))
+    old_key = Fernet.generate_key().decode()
+    fake_keyring["store"][("jenaonbot", "__master__")] = old_key
+
+    store = ConfigStore()
+
+    assert store.path == tmp_path / ".songpa-loan-tracker" / "config.json"
+    assert json.loads(store.path.read_text()) == config
+    assert fake_keyring["store"][("songpa-loan-tracker", "__master__")] == old_key
+
+
+def test_migration_does_not_overwrite_existing_config(tmp_path, monkeypatch, fake_keyring):
+    """새 설정이 이미 있으면 레거시는 건드리지 않는다."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    new_dir = tmp_path / ".songpa-loan-tracker"
+    new_dir.mkdir()
+    new_config = {"env": {}, "users": []}
+    (new_dir / "config.json").write_text(json.dumps(new_config))
+    legacy_dir = tmp_path / ".jenaonbot"
+    legacy_dir.mkdir()
+    (legacy_dir / "config.json").write_text(json.dumps({"env": {}, "users": [{"userId": "u9"}]}))
+
+    store = ConfigStore()
+
+    assert json.loads(store.path.read_text()) == new_config

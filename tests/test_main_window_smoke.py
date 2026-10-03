@@ -25,7 +25,7 @@ def test_main_window_constructs_when_keyring_fails(qapp, tmp_path, monkeypatch):
     monkeypatch.setattr(keyring, "set_password", raise_error)
     monkeypatch.setenv("HOME", str(tmp_path))
 
-    config_dir = tmp_path / ".jenaonbot"
+    config_dir = tmp_path / ".songpa-loan-tracker"
     config_dir.mkdir()
     config = {
         "env": {},
@@ -86,7 +86,7 @@ def _reservation(reservation_id, title, library, rank, waiting, expiry_date=""):
 @pytest.fixture
 def window(qapp, tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
-    config_dir = tmp_path / ".jenaonbot"
+    config_dir = tmp_path / ".songpa-loan-tracker"
     config_dir.mkdir()
     (config_dir / "config.json").write_text(json.dumps({"env": {}, "users": []}))
 

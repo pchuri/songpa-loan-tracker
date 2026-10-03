@@ -72,7 +72,7 @@ class MainWindow(QMainWindow):
         self._pending_reservation_user_selection = self._saved_reservation_user_selection
         self._suppress_state_save = False
 
-        self.setWindowTitle("JenaonBot Desktop")
+        self.setWindowTitle("송파도서관 대출현황")
         self.resize(960, 720)
 
         self.tabs = QTabWidget()
@@ -887,9 +887,9 @@ class MainWindow(QMainWindow):
         if not QSystemTrayIcon.isSystemTrayAvailable():
             return
         self.tray_icon = QSystemTrayIcon(self)
-        icon_path = Path(__file__).resolve().parents[1] / "resources" / "jenaonbot.icns"
+        icon_path = Path(__file__).resolve().parents[1] / "resources" / "songpa-loan-tracker.icns"
         if not icon_path.exists():
-            icon_path = Path(__file__).resolve().parents[1] / "jenaonbot.png"
+            icon_path = Path(__file__).resolve().parents[1] / "songpa-loan-tracker.png"
         if icon_path.exists():
             self.tray_icon.setIcon(QIcon(str(icon_path)))
         else:
@@ -920,7 +920,7 @@ class MainWindow(QMainWindow):
             event.ignore()
             self.hide()
             self.tray_icon.showMessage(
-                "JenaonBot Desktop",
+                "송파도서관 대출현황",
                 "앱이 시스템 트레이로 최소화되었습니다.",
                 QSystemTrayIcon.MessageIcon.Information,
                 2000

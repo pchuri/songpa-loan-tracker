@@ -1,7 +1,7 @@
 [project]
-name = "jenaonbot-desktop"
+name = "songpa-loan-tracker"
 version = "0.1.0"
-description = "PySide6 desktop client for JenaonBot"
+description = "PySide6 desktop client for Songpa district library loan status"
 readme = "README.md"
 requires-python = ">=3.9,<3.15"
 dependencies = [

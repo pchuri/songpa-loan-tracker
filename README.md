@@ -11,8 +11,8 @@ PySide6로 구현되었으며, 별도의 백엔드 없이 독립 실행됩니다
 별도 설치 없이 실행 파일 하나로 동작합니다. [Releases](../../releases)의 `latest-build`에서
 최신 빌드를 받으세요.
 
-- macOS: `JenaonBot-macos.zip` → 압축 해제 후 `JenaonBot.app` 실행
-- Windows: `JenaonBot.exe` 실행
+- macOS: `songpa-loan-tracker-macos.zip` → 압축 해제 후 `songpa-loan-tracker.app` 실행
+- Windows: `songpa-loan-tracker.exe` 실행
 
 첫 실행 시 도서관 회원번호와 비밀번호를 설정 탭에 입력하면 됩니다. 입력한 계정 정보는
 PC에만 암호화되어 저장되고 외부로 전송되지 않습니다.
@@ -32,7 +32,7 @@ PC에만 암호화되어 저장되고 외부로 전송되지 않습니다.
 
 - `src/main_app.py` — PySide6 GUI 메인 애플리케이션
 - `core/` — 도서관 웹 스크래핑 로직
-- `JenaonBot.spec` — PyInstaller 빌드 설정
+- `songpa-loan-tracker.spec` — PyInstaller 빌드 설정
 
 ## 개발 환경 설정
 
@@ -73,7 +73,7 @@ uv run src/main_app.py
    - 다크모드 활성화
    - 시스템 트레이로 최소화
 
-설정은 `~/.jenaonbot/config.json`에 자동 저장됩니다.
+설정은 `~/.songpa-loan-tracker/config.json`에 자동 저장됩니다.
 
 ## macOS 앱 빌드
 
@@ -84,13 +84,13 @@ uv run src/main_app.py
 uv pip install pyinstaller
 
 # 빌드 실행
-.venv/bin/pyinstaller JenaonBot.spec
+.venv/bin/pyinstaller songpa-loan-tracker.spec
 
 # 빌드된 앱 실행
-open dist/JenaonBot.app
+open dist/songpa-loan-tracker.app
 ```
 
-빌드된 `JenaonBot.app`은 다른 Mac에서도 실행 가능합니다 (Python 설치 불필요).
+빌드된 `songpa-loan-tracker.app`은 다른 Mac에서도 실행 가능합니다 (Python 설치 불필요).
 
 ### 방법 2: GitHub Actions 자동 빌드
 
@@ -98,28 +98,28 @@ open dist/JenaonBot.app
 2. **build-desktop** workflow 선택
 3. **Run workflow** 버튼 클릭
 4. 완료 후 **Artifacts**에서 다운로드
-   - `JenaonBot-macos` (macOS용)
-   - `JenaonBot-windows` (Windows용)
+   - `songpa-loan-tracker-macos` (macOS용)
+   - `songpa-loan-tracker-windows` (Windows용)
 
 ## 배포
 
 ### ZIP 파일로 배포
 ```bash
 cd dist
-zip -r JenaonBot-macOS.zip JenaonBot.app
+zip -r songpa-loan-tracker-macOS.zip songpa-loan-tracker.app
 ```
 
 ### DMG 생성 (선택)
 ```bash
 brew install create-dmg
 create-dmg \
-  --volname "JenaonBot Installer" \
+  --volname "songpa-loan-tracker Installer" \
   --window-pos 200 120 \
   --window-size 800 400 \
   --icon-size 100 \
   --app-drop-link 600 185 \
-  JenaonBot-Installer.dmg \
-  dist/JenaonBot.app
+  songpa-loan-tracker-Installer.dmg \
+  dist/songpa-loan-tracker.app
 ```
 
 ### 코드 서명 (권장)
@@ -127,12 +127,12 @@ Apple Developer 계정이 있는 경우:
 ```bash
 codesign --deep --force --verify --verbose \
   --sign "Developer ID Application: YOUR_NAME" \
-  dist/JenaonBot.app
+  dist/songpa-loan-tracker.app
 ```
 
 ### 키체인 접근 권한 유지 (ad-hoc 서명 문제)
 
-앱은 비밀번호 암호화용 마스터 키를 macOS 로그인 키체인(서비스 `jenaonbot`)에
+앱은 비밀번호 암호화용 마스터 키를 macOS 로그인 키체인(서비스 `songpa-loan-tracker`)에
 저장합니다. PyInstaller 기본 빌드는 ad-hoc 서명이라 빌드할 때마다 서명이 바뀌고,
 macOS 키체인 ACL은 이를 매번 다른 앱으로 취급해 접근 허용 프롬프트를 다시
 띄웁니다. 프롬프트를 승인할 수 없는 환경(예: 로그인 키체인 비밀번호 불일치)에서는
@@ -142,16 +142,16 @@ macOS 키체인 ACL은 이를 매번 다른 앱으로 취급해 접근 허용 �
 Apple Developer 계정이 없으면 자체 서명 인증서로도 충분합니다:
 
 1. **키체인 접근** 앱 → 메뉴 `키체인 접근 > 인증서 지원 > 인증서 생성...`
-   - 이름: `JenaonBot Dev` (임의), 인증서 유형: **코드 서명**, 로그인 키체인에 저장
+   - 이름: `songpa-loan-tracker Dev` (임의), 인증서 유형: **코드 서명**, 로그인 키체인에 저장
 2. `CODESIGN_IDENTITY` 환경 변수로 빌드하면 자동으로 서명됩니다:
    ```bash
-   CODESIGN_IDENTITY="JenaonBot Dev" .venv/bin/pyinstaller JenaonBot.spec
+   CODESIGN_IDENTITY="songpa-loan-tracker Dev" .venv/bin/pyinstaller songpa-loan-tracker.spec
    ```
    변수를 지정하지 않으면 기존과 동일하게 ad-hoc 서명됩니다. 인증서가 없는
    CI 빌드가 실패하지 않도록 opt-in으로 두었습니다. 이미 빌드된 앱에
-   나중에 서명하려면 `codesign --force --deep --sign "JenaonBot Dev" dist/JenaonBot.app`.
+   나중에 서명하려면 `codesign --force --deep --sign "songpa-loan-tracker Dev" dist/songpa-loan-tracker.app`.
 
-   서명 확인: `codesign -dvv dist/JenaonBot.app` 출력에 `Authority=JenaonBot Dev`가
+   서명 확인: `codesign -dvv dist/songpa-loan-tracker.app` 출력에 `Authority=songpa-loan-tracker Dev`가
    보이면 정상입니다 (ad-hoc이면 Authority 줄이 없습니다). 서명만 확인하지 말고
    앱이 실제로 뜨는지도 확인하세요.
 

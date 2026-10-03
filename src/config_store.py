@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import shutil
 from pathlib import Path
 
 import keyring
@@ -8,8 +9,12 @@ import keyring.errors
 from cryptography.fernet import Fernet, InvalidToken
 
 
-KEYRING_SERVICE = "jenaonbot"
+KEYRING_SERVICE = "songpa-loan-tracker"
 MASTER_KEY_USERNAME = "__master__"
+CONFIG_DIRNAME = ".songpa-loan-tracker"
+# 이전 이름(jenaonbot) 시절의 설정 위치. 첫 실행 시 자동 마이그레이션된다.
+LEGACY_KEYRING_SERVICE = "jenaonbot"
+LEGACY_CONFIG_DIRNAME = ".jenaonbot"
 
 logger = logging.getLogger(__name__)
 
@@ -20,7 +25,10 @@ class KeychainAccessError(Exception):
 
 class ConfigStore:
     def __init__(self, path: Path | None = None):
-        self.path = path or Path.home() / ".jenaonbot" / "config.json"
+        if path is None:
+            self._migrate_legacy()
+            path = Path.home() / CONFIG_DIRNAME / "config.json"
+        self.path = path
         self.path.parent.mkdir(parents=True, exist_ok=True)
         try:
             os.chmod(self.path.parent, 0o700)
@@ -31,6 +39,32 @@ class ConfigStore:
         # 마스터키 불일치(InvalidToken)로 복호화에 실패한 userId 목록.
         # 이 비밀번호들은 복구가 불가능하므로 UI가 재입력을 안내해야 한다.
         self.decrypt_failed_users: list[str] = []
+
+    def _migrate_legacy(self) -> None:
+        """이전 이름(jenaonbot) 시절의 설정·마스터키를 새 위치로 옮긴다.
+
+        Best-effort: 실패해도 앱 실행은 계속되며, 기존 설정은 건드리지 않는다.
+        """
+        new_cfg = Path.home() / CONFIG_DIRNAME / "config.json"
+        old_cfg = Path.home() / LEGACY_CONFIG_DIRNAME / "config.json"
+        if not new_cfg.exists() and old_cfg.exists():
+            try:
+                new_cfg.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(old_cfg, new_cfg)
+                os.chmod(new_cfg, 0o600)
+            except OSError:
+                logger.warning("Legacy config migration failed", exc_info=True)
+        try:
+            if not keyring.get_password(KEYRING_SERVICE, MASTER_KEY_USERNAME):
+                old_key = keyring.get_password(
+                    LEGACY_KEYRING_SERVICE, MASTER_KEY_USERNAME
+                )
+                if old_key:
+                    keyring.set_password(
+                        KEYRING_SERVICE, MASTER_KEY_USERNAME, old_key
+                    )
+        except Exception:  # noqa: BLE001 - migration must never block startup
+            logger.warning("Legacy keyring migration failed", exc_info=True)
 
     def _fail_keychain(self, message: str) -> KeychainAccessError:
         self.keychain_error = message
