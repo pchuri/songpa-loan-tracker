@@ -77,7 +77,7 @@ jobs:
             printf 'GITHUB_TOKEN = "%s"\n' "$UPDATER_TOKEN" > src/_updater_token.py
           fi
       - name: Build (PyInstaller)
-        run: uv run pyinstaller --windowed --onefile --name songpa-loan-tracker src/main_app.py
+        run: uv run pyinstaller --windowed --onefile --name songpa-loan-tracker --icon resources/songpa-loan-tracker.ico src/main_app.py
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         continue-on-error: true
