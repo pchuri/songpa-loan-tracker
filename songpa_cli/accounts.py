@@ -72,15 +72,21 @@ class AccountStore:
         return [a for a in accounts if isinstance(a, dict) and a.get("userId")]
 
     def _write(self, accounts: list[dict]) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        try:
-            os.chmod(self.path.parent, 0o700)
-        except OSError:
-            pass
+        folder = self.path.parent
+        # 폴더 권한(700)은 이 코드가 만든 폴더에만 맞춘다. SONGPA_CONFIG_DIR로 이미 있는
+        # 폴더(예: 홈 폴더)를 가리켰을 때 그 폴더 권한을 바꾸면 안 된다.
+        if not folder.exists():
+            folder.mkdir(parents=True)
+            try:
+                os.chmod(folder, 0o700)
+            except OSError:
+                pass
         # 중간에 끊겨도 기존 파일이 반쯤 지워지지 않게 임시 파일에 쓰고 바꿔 끼운다.
         tmp_path = self.path.with_name(self.path.name + ".tmp")
         fd = os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         try:
+            if hasattr(os, "fchmod"):
+                os.fchmod(fd, 0o600)  # 남아 있던 임시 파일에는 O_CREAT 권한이 적용되지 않는다.
             with os.fdopen(fd, "w", encoding="utf-8") as fh:
                 json.dump({"accounts": accounts}, fh, ensure_ascii=False, indent=2)
             os.replace(tmp_path, self.path)
@@ -128,9 +134,14 @@ class AccountStore:
                 "`songpa accounts add`로 다시 등록해 주세요."
             )
         try:
-            return self._keyring.get_password(KEYRING_SERVICE, user_id) or ""
+            password = self._keyring.get_password(KEYRING_SERVICE, user_id)
         except Exception as exc:
             raise AccountError(f"키체인에서 비밀번호를 읽지 못했습니다: {exc}") from exc
+        if not password:
+            raise AccountError(
+                f"키체인에 {user_id} 계정의 비밀번호가 없습니다. `songpa accounts add`로 다시 등록해 주세요."
+            )
+        return password
 
     def add(self, label: str, user_id: str, password: str) -> bool:
         """계정을 추가한다. 같은 아이디가 있으면 바꾸고 True를 돌려준다."""

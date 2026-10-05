@@ -5,10 +5,8 @@ from __future__ import annotations
 import html
 import os
 import shutil
-import socket
 import subprocess
 import sys
-import time
 import webbrowser
 from datetime import datetime
 from pathlib import Path
@@ -107,7 +105,7 @@ def _book_cells(book: dict, due_soon: int) -> tuple[str, str, str]:
     else:
         lib_html = f'<div>{lib}</div><div class="lib-sub">대출처</div>'
         loc = ""
-    short_date = esc(book["due_date"][5:])
+    short_date = esc(book["due_date"][5:]) if book["days_left"] is not None else ""
     return lib_html, f"<div>{title}</div>{loc}", f'{short_date}<br><span class="{cls}">{esc(label)}</span>'
 
 
@@ -193,14 +191,22 @@ def default_html_dir() -> Path:
 
 
 def write_html(report: dict, due_soon: int, path: Path | None = None) -> Path:
-    """HTML을 파일 하나에 덮어쓴다. 대출 내역이 담기므로 폴더 700, 파일 600."""
-    path = path or default_html_dir() / HTML_FILENAME
-    path.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        os.chmod(path.parent, 0o700)
-    except OSError:
-        pass
+    """HTML을 파일 하나에 덮어쓴다. 대출 내역이 담기므로 파일은 600.
+
+    폴더 권한(700)은 기본 위치일 때만 맞춘다. --output으로 고른 폴더는 건드리지 않는다.
+    """
+    if path is None:
+        path = default_html_dir() / HTML_FILENAME
+        path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            os.chmod(path.parent, 0o700)
+        except OSError:
+            pass
+    else:
+        path.parent.mkdir(parents=True, exist_ok=True)
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    if hasattr(os, "fchmod"):
+        os.fchmod(fd, 0o600)  # 이미 있던 파일은 O_CREAT 권한이 적용되지 않는다.
     with os.fdopen(fd, "w", encoding="utf-8") as fh:
         fh.write(render_html(report, due_soon))
     return path
@@ -210,33 +216,26 @@ def is_termux() -> bool:
     return shutil.which("termux-open-url") is not None
 
 
-def _serve_briefly(directory: Path) -> int:
-    """폰 안에서만 닿는 주소(127.0.0.1)로 잠깐 띄운다.
-
-    안드로이드 브라우저는 Termux 파일(content://com.termux.files/...)을 열지 못한다.
-    Termux 위젯 세션이 끝나도 살아 있도록 새 세션으로 띄우고 HTML_SERVE_SECONDS 뒤 꺼진다.
-    """
-    with socket.socket() as s:
-        s.bind(("127.0.0.1", 0))
-        port = s.getsockname()[1]
-    subprocess.Popen(
-        ["timeout", str(HTML_SERVE_SECONDS), sys.executable, "-m", "http.server", str(port),
-         "--bind", "127.0.0.1", "--directory", str(directory)],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True,
+def _serve_briefly(path: Path) -> str | None:
+    """songpa_cli.serve를 따로 띄워 주소를 받는다. Termux 위젯 세션이 끝나도 살아 있도록 새 세션으로."""
+    proc = subprocess.Popen(
+        [sys.executable, "-m", "songpa_cli.serve", str(path), str(HTML_SERVE_SECONDS)],
+        stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+        start_new_session=True, text=True,
     )
-    for _ in range(30):
-        try:
-            with socket.create_connection(("127.0.0.1", port), timeout=0.2):
-                return port
-        except OSError:
-            time.sleep(0.1)
-    return port
+    line = proc.stdout.readline().split()
+    proc.stdout.close()
+    if len(line) != 2:
+        return None
+    port, page_path = line
+    return f"http://127.0.0.1:{port}{page_path}"
 
 
 def open_html(path: Path) -> bool:
     """브라우저로 연다. 열 방법을 못 찾으면 False."""
     if is_termux():
-        port = _serve_briefly(path.parent)
-        url = f"http://127.0.0.1:{port}/{path.name}?t={int(time.time())}"
+        url = _serve_briefly(path)
+        if url is None:
+            return False
         return subprocess.run(["termux-open-url", url], check=False).returncode == 0
     return webbrowser.open(path.resolve().as_uri())

@@ -24,7 +24,6 @@ songpa --json                 # 전체 계정 (분석·답변용으로 권장)
 songpa --json -u 홍길동       # 특정 계정만 (이름이나 아이디, 여러 번 가능)
 songpa                        # 사람이 읽는 요약
 songpa --html                 # 카드 화면을 브라우저로 열기 (사용자가 화면을 원할 때)
-songpa --due-soon 5 --json    # 반납 임박 기준을 5일로
 ```
 
 종료 코드: `0` 성공, `1` 일부 계정 조회 실패(결과는 출력됨), `2` 계정 미등록·잘못된 옵션.
@@ -55,7 +54,8 @@ songpa --due-soon 5 --json    # 반납 임박 기준을 5일로
 ```
 
 - `books[].status`
-  - `loaned`: 대출 중. `days_left`가 음수면 연체, 0이면 오늘 반납.
+  - `loaned`: 대출 중. `days_left`가 음수면 연체, 0이면 오늘 반납. 반납일을 못 읽으면 `days_left`가
+    `null`이고 `due_date`에 사이트 글자가 그대로 들어 있다.
   - `ready_for_pickup`: 상호대차 책이 `library`(수령 도서관)에 도착. 찾아와야 한다.
   - `in_transit`: 상호대차 신청·이동 중. `transit_status`에 사이트 상태(`발송`·`요청중`·`신청중`).
 - `is_interlibrary`: 상호대차(책솔이 포함) 여부. 상호대차 대출은 `library`가 수령·반납 도서관,

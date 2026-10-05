@@ -22,7 +22,7 @@ class FakeKeyring:
 
 
 def test_file_store_keeps_password_in_a_private_file(tmp_path):
-    store = AccountStore(tmp_path, use_keyring=False)
+    store = AccountStore(tmp_path / "songpa", use_keyring=False)
 
     assert store.add("홍길동", "hong", "secret") is False
 
@@ -106,3 +106,22 @@ def test_broken_file_is_reported_not_overwritten(tmp_path):
     with pytest.raises(AccountError):
         AccountStore(tmp_path, use_keyring=False).add("홍길동", "hong", "pw")
     assert (tmp_path / "accounts.json").read_text(encoding="utf-8") == "{broken"
+
+
+def test_existing_config_folder_permissions_are_left_alone(tmp_path):
+    tmp_path.chmod(0o755)
+
+    AccountStore(tmp_path, use_keyring=False).add("홍길동", "hong", "pw")
+
+    assert stat.S_IMODE(tmp_path.stat().st_mode) == 0o755
+    assert stat.S_IMODE((tmp_path / "accounts.json").stat().st_mode) == 0o600
+
+
+def test_missing_keyring_password_points_to_accounts_add(tmp_path):
+    keyring = FakeKeyring()
+    store = AccountStore(tmp_path, keyring_module=keyring)
+    store.add("홍길동", "hong", "secret")
+    keyring.store.clear()
+
+    with pytest.raises(AccountError, match="accounts add"):
+        store.credentials()

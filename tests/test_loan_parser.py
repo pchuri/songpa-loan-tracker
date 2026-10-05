@@ -92,6 +92,7 @@ def test_doorae_keeps_only_in_transit_statuses_and_counts_returning():
         _doorae_row("접수 전 책", "잠실본동", "거마도서관", "신청중"),
         _doorae_row("다 본 책", "잠실본동", "거마도서관", "완료"),
         _doorae_row("취소한 책", "잠실본동", "거마도서관", "신청취소"),
+        _doorae_row("모르는 상태", "잠실본동", "거마도서관", "입수취소"),
     ])
 
     entries, returning = parse_doorae_status(html)

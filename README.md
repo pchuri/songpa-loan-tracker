@@ -94,8 +94,11 @@ pkg install python git
 pip install git+https://github.com/pchuri/songpa-loan-tracker
 ```
 
-화면 프로그램(PySide6)은 설치하지 않습니다. 업데이트는 `uv tool upgrade songpa-loan-tracker`
-(Termux는 `pip install --upgrade --force-reinstall git+https://github.com/pchuri/songpa-loan-tracker`)입니다.
+- 화면 프로그램(PySide6)은 설치하지 않습니다.
+- Termux에서 설치 중 컴파일 오류가 나면 `pkg install clang` 후 다시 설치하세요.
+  (2026-10 기준 Termux 파이썬 3.14에서는 aiohttp가 안드로이드용 완성본으로 받아져 컴파일 없이 설치됐습니다.)
+- 업데이트: `uv tool upgrade songpa-loan-tracker`
+  (Termux는 `pip install --upgrade --force-reinstall --no-deps git+https://github.com/pchuri/songpa-loan-tracker`)
 
 ### 계정 등록
 
@@ -112,11 +115,12 @@ songpa                    # 전체 계정 요약
 songpa -u 홍길동          # 한 사람만 (여러 번 쓸 수 있음)
 songpa --html             # 카드 화면을 브라우저로 열기 (아이폰 화면과 같은 모양, 라이트/다크 자동)
 songpa --json             # JSON 출력 (스크립트·AI용)
-songpa --notify           # Termux 알림으로 보내기 (Termux:API 앱 필요)
+songpa --notify           # Termux 알림으로 보내기 (pkg install termux-api + Termux:API 앱 필요)
 songpa --due-soon 5       # 반납 임박 기준 바꾸기 (기본 3일)
 ```
 
 - 안드로이드에서 `--html`은 폰 안에서만 열리는 임시 주소(`127.0.0.1`)로 2분 동안 화면을 띄우고 브라우저로 엽니다.
+  주소에는 매번 바뀌는 임의의 경로가 들어가고, 그 화면 한 장 말고는 아무 파일도 내보내지 않습니다.
 - Termux:Widget 앱을 쓰면 `~/.shortcuts/`에 `songpa --html`을 넣은 스크립트를 두고 홈 화면 버튼으로 실행할 수 있습니다.
 - AI 코딩 에이전트(Claude Code·Codex 등)용 스킬 설명은 [`skills/songpa/SKILL.md`](skills/songpa/SKILL.md)에 있습니다.
 

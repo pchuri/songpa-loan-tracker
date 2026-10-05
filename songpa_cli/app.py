@@ -140,7 +140,8 @@ def run_status(argv: list[str], store: AccountStore) -> int:
 
         if not send_notification(report, args.due_soon):
             title, content, _ = build_notification(report, args.due_soon)
-            print("termux-notification이 없어 알림 대신 출력합니다 (Termux:API 필요).", file=sys.stderr)
+            print("알림을 보내지 못해 대신 출력합니다. (Termux에서 `pkg install termux-api`와 "
+                  "Termux:API 앱 설치·알림 권한이 필요합니다)", file=sys.stderr)
             print(f"{title}\n\n{content}")
     else:
         from songpa_cli.text import render_text

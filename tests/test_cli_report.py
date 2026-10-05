@@ -173,3 +173,57 @@ def test_accounts_add_with_password_stdin_then_list(monkeypatch, tmp_path, capsy
         app.main(["accounts", "list"])
     listed = capsys.readouterr().out
     assert "홍길동\thong\t(비밀번호: 파일)" in listed and "secret" not in listed
+
+
+def test_unreadable_due_date_stays_a_loan_not_a_transfer():
+    report = build_report(
+        [{"label": "홍길동", "userId": "hong", "password": "pw"}],
+        [{"name": "홍길동", "reservations": [], "books": [
+            {"title": "연장한 책", "due_date": "2026.10.10(연장)", "is_interlibrary": False, "library": "거마"},
+            {"title": "날짜 없는 책", "due_date": "", "is_interlibrary": False, "library": "거마"},
+            {"title": "모르는 상태", "due_date": "입수취소", "is_interlibrary": True, "library": "거마"},
+        ]}],
+        now=NOW,
+    )
+    books = {b["title"]: b for b in report["accounts"][0]["books"]}
+
+    assert books["연장한 책"]["status"] == "loaned" and books["연장한 책"]["days_left"] == 5
+    assert books["연장한 책"]["due_date"] == "2026.10.10"
+    assert books["날짜 없는 책"]["status"] == "loaned" and books["날짜 없는 책"]["days_left"] is None
+    assert books["모르는 상태"]["status"] == "loaned" and books["모르는 상태"]["due_date"] == "입수취소"
+    assert "입수취소" in render_text(report, columns=120)
+    assert "입수취소" in render_html(report)
+
+
+def test_text_drops_control_characters_from_site_data(report):
+    report["accounts"][0]["books"][0]["title"] = "변\x1b[2J신"
+    text = render_text(report, color=True, columns=120)
+
+    assert "\x1b[2J" not in text and "변[2J신" in text
+
+
+def test_existing_html_file_is_made_private_and_custom_folder_left_alone(tmp_path, report):
+    folder = tmp_path / "shared"
+    folder.mkdir(mode=0o755)
+    target = folder / "page.html"
+    target.write_text("old")
+    target.chmod(0o644)
+
+    write_html(report, 3, target)
+
+    assert oct(target.stat().st_mode & 0o777) == "0o600"
+    assert oct(folder.stat().st_mode & 0o777) == "0o755"
+
+
+def test_notify_falls_back_when_termux_notification_hangs(monkeypatch, report):
+    import subprocess
+
+    from songpa_cli import notify
+
+    monkeypatch.setattr(notify.shutil, "which", lambda name: "/usr/bin/" + name)
+
+    def hang(*args, **kwargs):
+        raise subprocess.TimeoutExpired(args[0], kwargs.get("timeout"))
+
+    monkeypatch.setattr(notify.subprocess, "run", hang)
+    assert notify.send_notification(report) is False

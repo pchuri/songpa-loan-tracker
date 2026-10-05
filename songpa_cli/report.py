@@ -6,7 +6,10 @@ core는 대출 중이 아닌 상호대차 건의 상태(입수·발송 등)를 d
 
 from __future__ import annotations
 
+import re
 from datetime import date, datetime
+
+from core.splib import ACTIVE_DOORAE_STATUSES
 
 LOANED = "loaned"
 READY_FOR_PICKUP = "ready_for_pickup"
@@ -16,9 +19,16 @@ PICKUP_STATUS = "입수"
 _ORDER = {READY_FOR_PICKUP: 0, LOANED: 1, IN_TRANSIT: 2}
 
 
+DATE_PATTERN = re.compile(r"(\d{4})\.(\d{1,2})\.(\d{1,2})")
+
+
 def parse_date(text: str | None) -> date | None:
+    """글 안의 첫 날짜(YYYY.M.D). '2026.10.10(연장)'처럼 뒤에 뭐가 붙어도 읽는다."""
+    match = DATE_PATTERN.search(text or "")
+    if not match:
+        return None
     try:
-        return datetime.strptime(text or "", "%Y.%m.%d").date()
+        return date(*(int(part) for part in match.groups()))
     except ValueError:
         return None
 
@@ -27,15 +37,18 @@ def normalize_book(book: dict, today: date) -> dict:
     raw = book.get("due_date") or ""
     due = parse_date(raw)
     if due is not None:
-        status, transit_status, days_left = LOANED, None, (due - today).days
+        status, transit_status, days_left, due_text = LOANED, None, (due - today).days, due.strftime("%Y.%m.%d")
     elif raw == PICKUP_STATUS:
-        status, transit_status, days_left = READY_FOR_PICKUP, raw, None
+        status, transit_status, days_left, due_text = READY_FOR_PICKUP, raw, None, None
+    elif book.get("is_interlibrary") and raw in ACTIVE_DOORAE_STATUSES:
+        status, transit_status, days_left, due_text = IN_TRANSIT, raw, None, None
     else:
-        status, transit_status, days_left = IN_TRANSIT, raw or None, None
+        # 반납일을 못 읽은 대출. 이동 중인 상호대차로 오해하지 않게 대출로 두고 원문을 남긴다.
+        status, transit_status, days_left, due_text = LOANED, None, None, raw or None
     return {
         "title": book.get("title") or "",
         "status": status,
-        "due_date": raw if due is not None else None,
+        "due_date": due_text,
         "days_left": days_left,
         "transit_status": transit_status,
         "is_interlibrary": bool(book.get("is_interlibrary")),
@@ -45,7 +58,8 @@ def normalize_book(book: dict, today: date) -> dict:
 
 
 def _sort_key(book: dict):
-    days = book["days_left"] if book["days_left"] is not None else 0
+    # 반납일을 못 읽은 대출은 대출 목록 맨 앞에 둔다. 확인이 필요한 건이라서.
+    days = book["days_left"] if book["days_left"] is not None else -10**6
     return _ORDER[book["status"]], days
 
 
@@ -91,6 +105,8 @@ def due_label(book: dict, due_soon: int) -> tuple[str, str]:
     if book["status"] == IN_TRANSIT:
         return "이동중", "transit"
     days = book["days_left"]
+    if days is None:
+        return book["due_date"] or "반납일?", "normal"
     if days < 0:
         return f"연체 {-days}일", "overdue"
     if days == 0:

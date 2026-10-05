@@ -105,7 +105,6 @@ def extract_library_field(info_divs, label):
                 return span.get_text(strip=True).split(':')[-1].strip()
     return None
 
-KNOWN_DOORAE_STATUSES = tuple(status.value for status in DOORAE_STATUS)
 # 아직 끝나지 않은 상호대차. 완료·복귀중·신청취소는 지난 기록이라 뺀다.
 # Scriptable(scriptable/songpa-loan-tracker.js)의 ACTIVE_DOO_STATUSES와 같아야 한다.
 ACTIVE_DOORAE_STATUSES = (
@@ -116,17 +115,20 @@ ACTIVE_DOORAE_STATUSES = (
 )
 
 
+CANCEL_BUTTON_TEXT = "신청취소"
+
+
 def _doorae_status(status_box):
     """statusBox의 상태 낱말 하나를 돌려준다.
 
-    상태 칸에는 버튼 글자가 같이 붙는다("요청중 신청취소", 공백 없이 "요청중신청취소").
-    첫 낱말이 아는 상태로 시작하면 그 상태로 맞추고, 모르는 상태는 첫 낱말 그대로 둔다.
+    신청 중인 건은 상태 칸에 취소 버튼 글자가 붙는다("요청중 신청취소", 공백 없이
+    "요청중신청취소"). 첫 낱말에서 버튼 글자만 떼고, 나머지는 손대지 않는다.
+    모르는 상태(예: 입수취소)를 아는 상태로 잘못 맞추지 않으려고 앞부분 일치는 쓰지 않는다.
     """
     text = status_box.get_text(" ", strip=True) if status_box else ""
     first = text.split()[0] if text else ""
-    for known in KNOWN_DOORAE_STATUSES:
-        if first.startswith(known):
-            return known
+    if first != CANCEL_BUTTON_TEXT and first.endswith(CANCEL_BUTTON_TEXT):
+        first = first[: -len(CANCEL_BUTTON_TEXT)]
     return first
 
 

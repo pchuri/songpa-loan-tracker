@@ -39,14 +39,21 @@ def build_notification(report: dict, due_soon: int = 3) -> tuple[str, str, str]:
     return title, "\n".join(lines).strip(), priority
 
 
+# Termux:API 앱이 없거나 권한이 없으면 termux-notification이 끝나지 않고 멈춰 있는다.
+NOTIFY_TIMEOUT_SECONDS = 15
+
+
 def send_notification(report: dict, due_soon: int = 3) -> bool:
-    """알림을 보낸다. termux-notification이 없으면 False."""
+    """알림을 보낸다. 보내지 못하면(명령 없음·실패·시간 초과) False."""
     if not shutil.which("termux-notification"):
         return False
     title, content, priority = build_notification(report, due_soon)
-    subprocess.run(
-        ["termux-notification", "--id", NOTIFICATION_ID, "--title", title, "--content", content,
-         "--priority", priority, "--icon", "menu_book"],
-        check=True,
-    )
-    return True
+    try:
+        result = subprocess.run(
+            ["termux-notification", "--id", NOTIFICATION_ID, "--title", title, "--content", content,
+             "--priority", priority, "--icon", "menu_book"],
+            stdin=subprocess.DEVNULL, timeout=NOTIFY_TIMEOUT_SECONDS, check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return result.returncode == 0
