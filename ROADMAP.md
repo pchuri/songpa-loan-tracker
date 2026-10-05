@@ -1,18 +1,19 @@
 # Roadmap
 
 송파구립도서관 대출·예약 현황을 여러 형태로 제공하는 것을 목표로 한다.
-모든 형태는 `core/` 파서를 공유하며, 도서관 사이트 변경 시 고치는 곳은 한 군데다.
+파이썬 형태(데스크톱·스킬)는 `core/` 파서를 공유한다. iPhone Scriptable은 JavaScript라 파서가 따로 있어
+도서관 사이트가 바뀌면 `core/`와 `scriptable/songpa-loan-tracker.js`를 함께 고친다.
 
-## Phase 1 — 데스크톱 앱 공개 (진행 중)
+## Phase 1 — 데스크톱 앱 공개 (완료)
 
 - [x] `songpa-loan-tracker` 리포 생성 (히스토리 없는 새 출발)
-- [x] jenaonbot 명칭 제거, 자동 업데이트 탑재
-- [ ] public 전환
-- [ ] Windows 배포 (songpa-loan-tracker.exe)
+- [x] 이전 프로젝트 명칭 제거, 자동 업데이트 탑재
+- [x] public 전환
+- [x] Windows 배포 (songpa-loan-tracker.exe, `latest-build` 릴리스)
 
 ## Phase 2 — 코딩 에이전트용 스킬 (제네릭 버전)
 
-- home 리포의 `jenaon-library` 스킬(v1.0.0)은 가족 전용(private)이라 그대로 배포 불가
+- 개인용으로 쓰던 스킬은 특정 가족 계정 기준이라 그대로 배포 불가
 - 가족 정보를 뺀 제네릭 버전을 이 리포의 `skills/`에 추가
 - `core/` 파서 공유, 네트워크 전제조건 명시 (splib.or.kr에 닿는 네트워크에서만 동작)
 
