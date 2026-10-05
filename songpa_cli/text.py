@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shutil
 import unicodedata
 
 from songpa_cli.report import due_label
@@ -27,7 +28,20 @@ def _pad(text: str, width: int) -> str:
     return text + " " * max(0, width - _width(text))
 
 
-def render_text(report: dict, due_soon: int = 3, color: bool = False) -> str:
+# 이보다 좁은 화면(휴대폰 Termux는 40~50칸)에서는 도서관·날짜를 제목 아랫줄로 내린다.
+NARROW_COLUMNS = 70
+STATUS_WIDTH = 10
+
+
+def render_text(report: dict, due_soon: int = 3, color: bool = False, columns: int | None = None) -> str:
+    narrow = (columns or shutil.get_terminal_size().columns) < NARROW_COLUMNS
+
+    def row(status: str, tier: str, title: str, detail: str) -> list[str]:
+        head = f"  {paint(_pad(status, STATUS_WIDTH), tier)} {title}"
+        if narrow:
+            return [head, f"  {' ' * STATUS_WIDTH} {detail}"]
+        return [f"{head}  {detail}"]
+
     def paint(text: str, tier: str) -> str:
         return f"\033[{_ANSI[tier]}m{text}\033[0m" if color else text
 
@@ -64,11 +78,11 @@ def render_text(report: dict, due_soon: int = 3, color: bool = False) -> str:
                 where = f"{book['library']} · {book['due_date']}"
                 if book["is_interlibrary"]:
                     where += " · 상호대차"
-            lines.append(f"  {paint(_pad(label, 10), tier)} {book['title']}  {paint(where, 'dim')}")
+            lines.extend(row(label, tier, book["title"], paint(where, "dim")))
         for reservation in account["reservations"]:
             if reservation["ready_for_pickup"]:
                 state = paint(f"수령대기 ~{reservation['pickup_deadline']}", "pickup")
             else:
                 state = f"{reservation['rank'] or '?'}순위"
-            lines.append(f"  {_pad('예약', 10)} {reservation['title']}  {paint(reservation['library'], 'dim')} {state}")
+            lines.extend(row("예약", "dim", reservation["title"], f"{paint(reservation['library'], 'dim')} {state}"))
     return "\n".join(lines)

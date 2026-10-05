@@ -63,7 +63,7 @@ def test_counts_match_the_desktop_and_widget(report):
 
 
 def test_text_summary_shows_urgency_and_errors(report):
-    text = render_text(report, due_soon=3)
+    text = render_text(report, due_soon=3, columns=120)
 
     assert "2개 계정 · 총 5권 (상호대차 3) · 찾아올 책 2" in text
     assert "연체 2일" in text and "D-2" in text and "픽업필요" in text and "이동중" in text
@@ -71,7 +71,15 @@ def test_text_summary_shows_urgency_and_errors(report):
     assert "수령대기 ~2026.10.08" in text and "3순위" in text
     assert "조회 실패: 회원번호 또는 비밀번호가 올바르지 않습니다." in text
     assert "\033[" not in text
-    assert "\033[" in render_text(report, color=True)
+    assert "\033[" in render_text(report, color=True, columns=120)
+
+
+def test_narrow_screen_moves_details_under_the_title(report):
+    lines = render_text(report, due_soon=3, columns=48).splitlines()
+
+    i = next(n for n, line in enumerate(lines) if "데미안" in line)
+    assert lines[i].rstrip().endswith("데미안")
+    assert lines[i + 1].strip() == "잠실 · 2026.10.03 · 상호대차"
 
 
 def test_html_escapes_titles_and_follows_dark_mode(report):
