@@ -7,6 +7,7 @@
 |---|---|
 | 🖥️ **데스크톱 앱** (macOS/Windows) | PySide6 앱. 실행 파일 하나로 동작합니다. |
 | 📱 **아이폰** ([Scriptable](https://scriptable.app)) | 홈 화면 위젯 + 계정별 카드 화면. [`scriptable/`](scriptable/) 참고 |
+| 🤖 **안드로이드 앱** ([반납요정](https://github.com/pchuri/return-fairy)) | 같은 카드 화면 + 매일 반납·찾아올 책 알림. APK로 설치 (별도 저장소) |
 | ⌨️ **명령어 `songpa`** (PC·안드로이드 Termux) | 터미널 요약, JSON, 카드 화면(HTML), Termux 알림. AI 코딩 에이전트 스킬로도 사용 |
 
 별도의 서버 없이 PC나 휴대폰이 도서관 홈페이지에 직접 로그인해서 조회합니다.
@@ -84,6 +85,12 @@
 
 설정은 `~/.songpa-loan-tracker/config.json`에 자동 저장됩니다.
 
+## 안드로이드 앱 (반납요정)
+
+[반납요정](https://github.com/pchuri/return-fairy)은 같은 카드 화면을 안드로이드 앱으로 보여 주고, 매일 정한 시각에 조회해서
+연체·반납 임박·찾아올 책을 알려 줍니다. 구글 플레이에는 없고 [최신 릴리스](https://github.com/pchuri/return-fairy/releases/latest)의
+APK로 설치합니다. 도서관 조회 코드는 이 저장소의 `songpa_core/`를 Kotlin으로 옮긴 것이라 권수 기준이 같습니다.
+
 ## 아이폰 (Scriptable)
 
 [Scriptable](https://scriptable.app) 앱용 스크립트입니다. 홈 화면 위젯에서 반납이 가까운 책과 찾아올 책을 보여주고,
@@ -144,7 +151,7 @@ songpa --due-soon 5       # 반납 임박 기준 바꾸기 (기본 3일)
   다른 사람과 같이 쓰는 기기에서는 쓰지 마세요.
   계정 정보는 도서관 홈페이지 로그인에만 쓰이고 다른 곳으로 전송되지 않습니다.
 - **비공식 도구**: 송파구립도서관과 관계없는 개인 프로젝트입니다. 도서관 홈페이지 구조가 바뀌면 조회가 안 될 수 있습니다.
-  (데스크톱·`songpa` 명령어는 `songpa_core/`, 아이폰은 `scriptable/songpa-loan-tracker.js`의 파서를 함께 고칩니다.)
+  (데스크톱·`songpa` 명령어는 `songpa_core/`, 아이폰은 `scriptable/songpa-loan-tracker.js`, 안드로이드 앱은 반납요정 저장소의 `core/` 파서를 함께 고칩니다.)
 
 ---
 
