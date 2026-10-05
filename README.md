@@ -17,6 +17,12 @@
 
 ![데스크톱 대출 현황](docs/images/desktop-loans.png)
 
+<details><summary>다크 모드</summary>
+
+![데스크톱 대출 현황 (다크 모드)](docs/images/desktop-loans-dark.png)
+
+</details>
+
 **데스크톱 — 예약 현황**: 수령 대기 예약을 맨 위에, 같은 책 예약은 나란히
 
 ![데스크톱 예약 현황](docs/images/desktop-reservations.png)

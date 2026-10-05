@@ -128,7 +128,10 @@ QPushButton {
     border-radius: 4px;
 }
 QPushButton:hover { background-color: #2a2f38; }
-QCheckBox, QLabel { color: #e2e8f0; }
+QCheckBox { color: #e2e8f0; }
+/* 맨 위 QWidget 규칙이 라벨에도 페이지 배경색을 칠해, 카드(#1a1d23) 안 글자 뒤에 어두운 네모가 생겼다.
+   라벨은 부모 배경을 그대로 보이게 한다. #DdayBadge처럼 ID로 색을 준 라벨은 그 규칙이 이긴다. */
+QLabel { color: #e2e8f0; background-color: transparent; }
 
 #StatusPage, #ReservationPage { background-color: #0f1115; }
 
