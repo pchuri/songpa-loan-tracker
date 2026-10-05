@@ -13,5 +13,5 @@ class DOORAE_STATUS(Enum):
     SENDING = "발송"
     OBTAINED = "입수"
     RETURNING = "복귀중"
-    REQUESTED_RAW = "요청중신청취소"
     REQUESTED = "요청중"
+    APPLIED = "신청중"

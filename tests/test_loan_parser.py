@@ -88,12 +88,17 @@ def test_doorae_keeps_only_in_transit_statuses_and_counts_returning():
         _doorae_row("가는 책", "거마도서관", "송파위례도서관", "복귀중"),
         _doorae_row("오는 책", "돌마리도서관", "송파글마루도서관", "입수"),
         _doorae_row("신청한 책", "잠실본동", "거마도서관", "요청중신청취소"),
+        _doorae_row("버튼 붙은 책", "잠실본동", "거마도서관", "요청중 <a>신청취소</a>"),
+        _doorae_row("접수 전 책", "잠실본동", "거마도서관", "신청중"),
+        _doorae_row("다 본 책", "잠실본동", "거마도서관", "완료"),
+        _doorae_row("취소한 책", "잠실본동", "거마도서관", "신청취소"),
+        _doorae_row("모르는 상태", "잠실본동", "거마도서관", "입수취소"),
     ])
 
     entries, returning = parse_doorae_status(html)
 
-    assert [e["title"] for e in entries] == ["오는 책", "신청한 책"]
-    assert [e["status"] for e in entries] == ["입수", "요청중"]
+    assert [e["title"] for e in entries] == ["오는 책", "신청한 책", "버튼 붙은 책", "접수 전 책"]
+    assert [e["status"] for e in entries] == ["입수", "요청중", "요청중", "신청중"]
     assert returning == 1
 
 

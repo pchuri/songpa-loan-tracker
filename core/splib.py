@@ -105,6 +105,33 @@ def extract_library_field(info_divs, label):
                 return span.get_text(strip=True).split(':')[-1].strip()
     return None
 
+# 아직 끝나지 않은 상호대차. 완료·복귀중·신청취소는 지난 기록이라 뺀다.
+# Scriptable(scriptable/songpa-loan-tracker.js)의 ACTIVE_DOO_STATUSES와 같아야 한다.
+ACTIVE_DOORAE_STATUSES = (
+    DOORAE_STATUS.OBTAINED.value,
+    DOORAE_STATUS.SENDING.value,
+    DOORAE_STATUS.REQUESTED.value,
+    DOORAE_STATUS.APPLIED.value,
+)
+
+
+CANCEL_BUTTON_TEXT = "신청취소"
+
+
+def _doorae_status(status_box):
+    """statusBox의 상태 낱말 하나를 돌려준다.
+
+    신청 중인 건은 상태 칸에 취소 버튼 글자가 붙는다("요청중 신청취소", 공백 없이
+    "요청중신청취소"). 첫 낱말에서 버튼 글자만 떼고, 나머지는 손대지 않는다.
+    모르는 상태(예: 입수취소)를 아는 상태로 잘못 맞추지 않으려고 앞부분 일치는 쓰지 않는다.
+    """
+    text = status_box.get_text(" ", strip=True) if status_box else ""
+    first = text.split()[0] if text else ""
+    if first != CANCEL_BUTTON_TEXT and first.endswith(CANCEL_BUTTON_TEXT):
+        first = first[: -len(CANCEL_BUTTON_TEXT)]
+    return first
+
+
 def parse_doorae_status(content):
     """상호대차 현황 페이지를 이송 중인 건 리스트로 파싱한다.
 
@@ -116,12 +143,10 @@ def parse_doorae_status(content):
     returning_count = 0
 
     for info_box, status_box in _iter_rows(soup):
-        status = status_box.get_text(strip=True) if status_box else ""
-        if status == DOORAE_STATUS.REQUESTED_RAW.value:
-            status = DOORAE_STATUS.REQUESTED.value
+        status = _doorae_status(status_box)
         # 복귀중 집계는 제목 유무와 무관하다. 제목 없는 행에서 빠지면
         # active_interlibrary_loans가 과다 보고된다.
-        if DOORAE_STATUS.RETURNING.value in status:
+        if status == DOORAE_STATUS.RETURNING.value:
             returning_count += 1
 
         title_div = info_box.find('div', class_='title')
@@ -139,14 +164,7 @@ def parse_doorae_status(content):
             'providing_library': abbreviate_library_name(providing_library),
         })
 
-    in_transit = [
-        entry for entry in entries
-        if entry['status'] in (
-            DOORAE_STATUS.SENDING.value,
-            DOORAE_STATUS.OBTAINED.value,
-            DOORAE_STATUS.REQUESTED.value,
-        )
-    ]
+    in_transit = [entry for entry in entries if entry['status'] in ACTIVE_DOORAE_STATUSES]
 
     return in_transit, returning_count
 

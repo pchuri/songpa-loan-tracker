@@ -1,7 +1,7 @@
 # Roadmap
 
 송파구립도서관 대출·예약 현황을 여러 형태로 제공하는 것을 목표로 한다.
-파이썬 형태(데스크톱·스킬)는 `core/` 파서를 공유한다. iPhone Scriptable은 JavaScript라 파서가 따로 있어
+파이썬 형태(데스크톱·`songpa` 명령어·스킬)는 `core/` 파서를 공유한다. iPhone Scriptable은 JavaScript라 파서가 따로 있어
 도서관 사이트가 바뀌면 `core/`와 `scriptable/songpa-loan-tracker.js`를 함께 고친다.
 
 ## Phase 1 — 데스크톱 앱 공개 (완료)
@@ -11,11 +11,12 @@
 - [x] public 전환
 - [x] Windows 배포 (songpa-loan-tracker.exe, `latest-build` 릴리스)
 
-## Phase 2 — 코딩 에이전트용 스킬 (제네릭 버전)
+## Phase 2 — `songpa` 명령어와 코딩 에이전트용 스킬
 
-- 개인용으로 쓰던 스킬은 특정 가족 계정 기준이라 그대로 배포 불가
-- 가족 정보를 뺀 제네릭 버전을 이 리포의 `skills/`에 추가
-- `core/` 파서 공유, 네트워크 전제조건 명시 (splib.or.kr에 닿는 네트워크에서만 동작)
+- [x] `core/` 파서를 쓰는 `songpa` 명령어 (`songpa_cli/`): 요약, JSON, 카드 화면(HTML), Termux 알림
+- [x] 계정은 사용자가 등록 (`songpa accounts add`). macOS·Windows는 OS 키체인, Termux·리눅스는 권한 600 파일
+- [x] PySide6 없이 설치 가능하게 의존성 분리 (데스크톱 의존성은 uv `desktop` 그룹)
+- [x] 가족 정보 없는 제네릭 스킬 `skills/songpa/SKILL.md`, 네트워크 전제조건 명시
 
 ## Phase 3 — iPhone Scriptable (제네릭 버전)
 

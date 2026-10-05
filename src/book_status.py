@@ -1,7 +1,7 @@
 from datetime import datetime
 
 
-STATUS_WAITING_LABELS = {"입수", "발송", "요청중", "복귀중"}
+STATUS_WAITING_LABELS = {"입수", "발송", "요청중", "신청중", "복귀중"}
 
 
 def compute_book_status(book: dict) -> tuple[str, str]:

@@ -7,6 +7,7 @@
 |---|---|
 | 🖥️ **데스크톱 앱** (macOS/Windows) | PySide6 앱. 실행 파일 하나로 동작합니다. |
 | 📱 **아이폰** ([Scriptable](https://scriptable.app)) | 홈 화면 위젯 + 계정별 카드 화면. [`scriptable/`](scriptable/) 참고 |
+| ⌨️ **명령어 `songpa`** (PC·안드로이드 Termux) | 터미널 요약, JSON, 카드 화면(HTML), Termux 알림. AI 코딩 에이전트 스킬로도 사용 |
 
 별도의 서버 없이 PC나 휴대폰이 도서관 홈페이지에 직접 로그인해서 조회합니다.
 
@@ -78,14 +79,62 @@
 [Scriptable](https://scriptable.app) 앱용 스크립트입니다. 홈 화면 위젯에서 반납이 가까운 책과 찾아올 책을 보여주고,
 위젯을 누르면 계정별 카드 화면이 열립니다. 설치·계정 설정·자동 업데이트는 [`scriptable/README.md`](scriptable/README.md)를 참고하세요.
 
+## 명령어 (songpa)
+
+터미널에서 쓰는 조회 명령어입니다. PC(macOS·Windows·리눅스)와 안드로이드 [Termux](https://termux.dev)에서 동작합니다.
+
+### 설치
+
+```bash
+# PC: uv와 git이 있으면 (https://docs.astral.sh/uv/, Windows는 https://git-scm.com/)
+uv tool install git+https://github.com/pchuri/songpa-loan-tracker
+
+# 안드로이드 Termux
+pkg install python git
+pip install git+https://github.com/pchuri/songpa-loan-tracker
+```
+
+- 화면 프로그램(PySide6)은 설치하지 않습니다.
+- Termux에서 설치 중 컴파일 오류가 나면 `pkg install clang` 후 다시 설치하세요.
+  (2026-10 기준 Termux 파이썬 3.14에서는 aiohttp가 안드로이드용 완성본으로 받아져 컴파일 없이 설치됐습니다.)
+- 업데이트: `uv tool upgrade songpa-loan-tracker`
+  (Termux는 `pip install --upgrade --force-reinstall --no-deps git+https://github.com/pchuri/songpa-loan-tracker`)
+
+### 계정 등록
+
+```bash
+songpa accounts add       # 이름·아이디·비밀번호를 차례로 입력 (비밀번호는 화면에 안 보임)
+songpa accounts list      # 등록된 계정 보기
+songpa accounts remove 홍길동
+```
+
+### 조회
+
+```bash
+songpa                    # 전체 계정 요약
+songpa -u 홍길동          # 한 사람만 (여러 번 쓸 수 있음)
+songpa --html             # 카드 화면을 브라우저로 열기 (아이폰 화면과 같은 모양, 라이트/다크 자동)
+songpa --json             # JSON 출력 (스크립트·AI용)
+songpa --notify           # Termux 알림으로 보내기 (pkg install termux-api + Termux:API 앱 필요)
+songpa --due-soon 5       # 반납 임박 기준 바꾸기 (기본 3일)
+```
+
+- 안드로이드에서 `--html`은 폰 안에서만 열리는 임시 주소(`127.0.0.1`)로 2분 동안 화면을 띄우고 브라우저로 엽니다.
+  주소에는 매번 바뀌는 임의의 경로가 들어가고, 그 화면 한 장 말고는 아무 파일도 내보내지 않습니다.
+- Termux:Widget 앱을 쓰면 `~/.shortcuts/`에 `songpa --html`을 넣은 스크립트를 두고 홈 화면 버튼으로 실행할 수 있습니다.
+- AI 코딩 에이전트(Claude Code·Codex 등)용 스킬 설명은 [`skills/songpa/SKILL.md`](skills/songpa/SKILL.md)에 있습니다.
+
 ## 알아 두기
 
 - **네트워크**: splib.or.kr에 직접 닿는 네트워크에서만 동작합니다. 집·휴대폰(LTE/5G)에서는 정상이지만,
   클라우드 서버나 일부 회사·기관 네트워크(VPN 포함)에서는 도서관 홈페이지 접속이 막혀 조회가 실패할 수 있습니다.
 - **계정 정보**: 데스크톱은 PC에 암호화해서(암호화 키는 OS 키체인) 저장하고, 아이폰은 iOS 키체인에 저장합니다.
+  `songpa` 명령어는 macOS·Windows에서는 비밀번호를 OS 키체인에, 안드로이드 Termux·리눅스에서는 설정 파일
+  (`~/.config/songpa/accounts.json`, 본인만 읽기 가능)에 저장합니다. 파일에 저장할 때는 암호화하지 않으므로
+  다른 사람과 같이 쓰는 기기에서는 쓰지 마세요.
   계정 정보는 도서관 홈페이지 로그인에만 쓰이고 다른 곳으로 전송되지 않습니다.
 - **비공식 도구**: 송파구립도서관과 관계없는 개인 프로젝트입니다. 도서관 홈페이지 구조가 바뀌면 조회가 안 될 수 있습니다.
-  (데스크톱은 `core/`, 아이폰은 `scriptable/songpa-loan-tracker.js`의 파서를 함께 고칩니다.)
+  (데스크톱·`songpa` 명령어는 `core/`, 아이폰은 `scriptable/songpa-loan-tracker.js`의 파서를 함께 고칩니다.)
 
 ---
 
@@ -94,7 +143,9 @@
 ## 프로젝트 구조
 
 - `src/main_app.py` — PySide6 GUI 메인 애플리케이션
-- `core/` — 도서관 웹 스크래핑 로직
+- `core/` — 도서관 웹 스크래핑 로직 (데스크톱 앱과 `songpa` 명령어가 같이 씀)
+- `songpa_cli/` — `songpa` 명령어 (`pyproject.toml`의 기본 의존성만 사용)
+- `skills/songpa/` — AI 코딩 에이전트용 스킬 설명
 - `songpa-loan-tracker.spec` — PyInstaller 빌드 설정
 - `scriptable/` — 아이폰 Scriptable 스크립트 (JavaScript, `core/`와 별도 파서)
 - `docs/images/` — README 스크린샷
@@ -109,11 +160,15 @@ cd songpa-loan-tracker
 curl -LsSf https://astral.sh/uv/install.sh | sh
 source ~/.local/bin/env
 
-# 의존성 설치 및 가상환경 생성
+# 의존성 설치 및 가상환경 생성 (데스크톱 앱용 desktop 그룹과 dev 그룹까지 설치)
 uv sync
 
 # 앱 실행
 uv run src/main_app.py
+
+# 명령어 실행 / 테스트
+uv run songpa --help
+uv run pytest
 ```
 
 ## 자동 업데이트 동작 (Windows)
