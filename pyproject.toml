@@ -1,27 +1,44 @@
 [project]
 name = "songpa-loan-tracker"
 version = "0.1.0"
-description = "PySide6 desktop client for Songpa district library loan status"
+description = "Songpa district library loan status: desktop app and songpa CLI"
 readme = "README.md"
 requires-python = ">=3.9,<3.15"
+# 여기에는 songpa 명령어(CLI)가 쓰는 것만 둔다. pip로 설치하는 사람(Termux 포함)은
+# 이것만 받는다. 데스크톱 앱 의존성은 아래 desktop 그룹에 있고 uv sync가 함께 깐다.
 dependencies = [
-    "PySide6==6.10.1",
-    "aiohttp==3.10.10",
+    "aiohttp>=3.9,<4",
     "beautifulsoup4",
+    # Termux(sys_platform == linux)에서는 비밀 보관함이 없고 빌드도 무거워 받지 않는다.
+    "keyring>=24.0.0; sys_platform == 'darwin' or sys_platform == 'win32'",
+]
+
+[project.scripts]
+songpa = "songpa_cli.app:main"
+
+[dependency-groups]
+desktop = [
+    "PySide6==6.10.1",
     "cryptography>=42.0.0",
     "keyring>=24.0.0",
     "python-dotenv>=1.0.1",
     "qasync==0.27.0",
 ]
-
-[dependency-groups]
 dev = [
     "pyinstaller>=6.22.3",
     "pytest>=8.0",
 ]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["core", "songpa_cli"]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
 testpaths = ["tests"]
 
 [tool.uv]
+default-groups = ["desktop", "dev"]
