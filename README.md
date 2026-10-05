@@ -25,6 +25,10 @@
 
 <img src="docs/images/scriptable-light-dark.png" alt="아이폰 Scriptable 화면 (라이트/다크)" width="600">
 
+**명령어 `songpa --html`** — 같은 내용을 PC·안드로이드 브라우저에서 카드 화면으로 (라이트/다크 자동)
+
+<img src="docs/images/songpa-html-light-dark.png" alt="songpa --html 카드 화면 (라이트/다크)" width="600">
+
 > 스크린샷은 예시 데이터로 만든 화면입니다.
 
 ## 주요 기능
@@ -213,8 +217,8 @@ open dist/songpa-loan-tracker.app
 
 ### ZIP 파일로 배포
 ```bash
-cd dist
-zip -r songpa-loan-tracker-macOS.zip songpa-loan-tracker.app
+# zip -r 대신 ditto를 쓴다. zip은 앱 번들의 심볼릭 링크·확장 속성을 망가뜨려 압축을 푼 앱이 실행되지 않을 수 있다.
+ditto -c -k --keepParent dist/songpa-loan-tracker.app dist/songpa-loan-tracker-macos.zip
 ```
 
 ### DMG 생성 (선택)
