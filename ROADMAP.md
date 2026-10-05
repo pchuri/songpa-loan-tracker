@@ -18,8 +18,9 @@
 
 ## Phase 3 — iPhone Scriptable (제네릭 버전)
 
-- iCloud Drive에 배포된 동작 검증 위젯을 제네릭 버전으로 정리해 배포
-- 계정 설정 방식 문서화
+- [x] iCloud Drive에 배포된 동작 검증 위젯을 제네릭 버전으로 정리해 배포 (`scriptable/`)
+- [x] 계정 설정 방식 문서화 (`songpa-accounts.js`, 입력받아 키체인 저장)
+- Scriptable은 JavaScript라 `core/` 파서를 공유하지 못한다. 사이트 변경 시 `scriptable/songpa-loan-tracker.js`도 함께 고친다.
 
 ## 전제조건 (공통)
 
