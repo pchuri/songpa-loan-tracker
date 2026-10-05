@@ -103,9 +103,9 @@ def run_accounts(argv: list[str], store: AccountStore) -> int:
 
 
 def fetch_report(credentials: list[dict]) -> dict:
-    # core 로그는 실패한 계정의 아이디를 남긴다. 화면에는 결과의 오류 문구만 보여 준다.
-    logging.getLogger("core").setLevel(logging.CRITICAL)
-    from core.splib import get_infos_async
+    # songpa_core 로그는 실패한 계정의 아이디를 남긴다. 화면에는 결과의 오류 문구만 보여 준다.
+    logging.getLogger("songpa_core").setLevel(logging.CRITICAL)
+    from songpa_core.splib import get_infos_async
 
     infos = asyncio.run(get_infos_async([
         {"userId": c["userId"], "password": c["password"]} for c in credentials

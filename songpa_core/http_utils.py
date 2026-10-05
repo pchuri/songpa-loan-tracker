@@ -2,7 +2,7 @@ import asyncio
 
 import aiohttp
 
-from core.config import CT, LOGIN_URL
+from songpa_core.config import CT, LOGIN_URL
 
 
 class HttpError(Exception):

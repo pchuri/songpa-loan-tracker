@@ -10,9 +10,9 @@ from urllib.parse import urlparse
 import aiohttp
 from bs4 import BeautifulSoup
 
-from core.config import INDEX_URL, LOAN_URL, INTERLIBRARY_LOAN_URL, RESERVATION_URL, DOORAE_STATUS
-from core.http_utils import login, fetch
-from core.splib_utils import abbreviate_library_name, parse_index_content
+from songpa_core.config import INDEX_URL, LOAN_URL, INTERLIBRARY_LOAN_URL, RESERVATION_URL, DOORAE_STATUS
+from songpa_core.http_utils import login, fetch
+from songpa_core.splib_utils import abbreviate_library_name, parse_index_content
 
 
 USER_FETCH_TIMEOUT_SECONDS = 30

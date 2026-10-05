@@ -17,6 +17,12 @@
 
 ![데스크톱 대출 현황](docs/images/desktop-loans.png)
 
+<details><summary>다크 모드</summary>
+
+![데스크톱 대출 현황 (다크 모드)](docs/images/desktop-loans-dark.png)
+
+</details>
+
 **데스크톱 — 예약 현황**: 수령 대기 예약을 맨 위에, 같은 책 예약은 나란히
 
 ![데스크톱 예약 현황](docs/images/desktop-reservations.png)
@@ -24,6 +30,10 @@
 **아이폰 (Scriptable)** — 기기 설정에 따라 라이트/다크 모드로 표시
 
 <img src="docs/images/scriptable-light-dark.png" alt="아이폰 Scriptable 화면 (라이트/다크)" width="600">
+
+**명령어 `songpa --html`** — 같은 내용을 PC·안드로이드 브라우저에서 카드 화면으로 (라이트/다크 자동)
+
+<img src="docs/images/songpa-html-light-dark.png" alt="songpa --html 카드 화면 (라이트/다크)" width="600">
 
 > 스크린샷은 예시 데이터로 만든 화면입니다.
 
@@ -134,7 +144,7 @@ songpa --due-soon 5       # 반납 임박 기준 바꾸기 (기본 3일)
   다른 사람과 같이 쓰는 기기에서는 쓰지 마세요.
   계정 정보는 도서관 홈페이지 로그인에만 쓰이고 다른 곳으로 전송되지 않습니다.
 - **비공식 도구**: 송파구립도서관과 관계없는 개인 프로젝트입니다. 도서관 홈페이지 구조가 바뀌면 조회가 안 될 수 있습니다.
-  (데스크톱·`songpa` 명령어는 `core/`, 아이폰은 `scriptable/songpa-loan-tracker.js`의 파서를 함께 고칩니다.)
+  (데스크톱·`songpa` 명령어는 `songpa_core/`, 아이폰은 `scriptable/songpa-loan-tracker.js`의 파서를 함께 고칩니다.)
 
 ---
 
@@ -143,11 +153,11 @@ songpa --due-soon 5       # 반납 임박 기준 바꾸기 (기본 3일)
 ## 프로젝트 구조
 
 - `src/main_app.py` — PySide6 GUI 메인 애플리케이션
-- `core/` — 도서관 웹 스크래핑 로직 (데스크톱 앱과 `songpa` 명령어가 같이 씀)
+- `songpa_core/` — 도서관 웹 스크래핑 로직 (데스크톱 앱과 `songpa` 명령어가 같이 씀)
 - `songpa_cli/` — `songpa` 명령어 (`pyproject.toml`의 기본 의존성만 사용)
 - `skills/songpa/` — AI 코딩 에이전트용 스킬 설명
 - `songpa-loan-tracker.spec` — PyInstaller 빌드 설정
-- `scriptable/` — 아이폰 Scriptable 스크립트 (JavaScript, `core/`와 별도 파서)
+- `scriptable/` — 아이폰 Scriptable 스크립트 (JavaScript, `songpa_core/`와 별도 파서)
 - `docs/images/` — README 스크린샷
 
 ## 개발 환경 설정
@@ -213,8 +223,8 @@ open dist/songpa-loan-tracker.app
 
 ### ZIP 파일로 배포
 ```bash
-cd dist
-zip -r songpa-loan-tracker-macOS.zip songpa-loan-tracker.app
+# zip -r 대신 ditto를 쓴다. zip은 앱 번들의 심볼릭 링크·확장 속성을 망가뜨려 압축을 푼 앱이 실행되지 않을 수 있다.
+ditto -c -k --keepParent dist/songpa-loan-tracker.app dist/songpa-loan-tracker-macos.zip
 ```
 
 ### DMG 생성 (선택)

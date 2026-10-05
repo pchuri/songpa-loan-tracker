@@ -2,7 +2,7 @@ import asyncio
 
 import pytest
 
-from core.http_utils import AuthError, _looks_like_login_failure, login
+from songpa_core.http_utils import AuthError, _looks_like_login_failure, login
 
 
 # 2026-08 실측: 잘못된 자격증명에 대한 응답 본문. HTTP 200에 JSESSIONID 쿠키까지

@@ -1,4 +1,4 @@
-from core.splib import parse_doorae_status, parse_loan_status
+from songpa_core.splib import parse_doorae_status, parse_loan_status
 
 
 def _loan_row(title, library, dates_html, status):

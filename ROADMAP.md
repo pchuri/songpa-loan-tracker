@@ -1,8 +1,8 @@
 # Roadmap
 
 송파구립도서관 대출·예약 현황을 여러 형태로 제공하는 것을 목표로 한다.
-파이썬 형태(데스크톱·`songpa` 명령어·스킬)는 `core/` 파서를 공유한다. iPhone Scriptable은 JavaScript라 파서가 따로 있어
-도서관 사이트가 바뀌면 `core/`와 `scriptable/songpa-loan-tracker.js`를 함께 고친다.
+파이썬 형태(데스크톱·`songpa` 명령어·스킬)는 `songpa_core/` 파서를 공유한다. iPhone Scriptable은 JavaScript라 파서가 따로 있어
+도서관 사이트가 바뀌면 `songpa_core/`와 `scriptable/songpa-loan-tracker.js`를 함께 고친다.
 
 ## Phase 1 — 데스크톱 앱 공개 (완료)
 
@@ -13,7 +13,7 @@
 
 ## Phase 2 — `songpa` 명령어와 코딩 에이전트용 스킬
 
-- [x] `core/` 파서를 쓰는 `songpa` 명령어 (`songpa_cli/`): 요약, JSON, 카드 화면(HTML), Termux 알림
+- [x] `songpa_core/` 파서를 쓰는 `songpa` 명령어 (`songpa_cli/`): 요약, JSON, 카드 화면(HTML), Termux 알림
 - [x] 계정은 사용자가 등록 (`songpa accounts add`). macOS·Windows는 OS 키체인, Termux·리눅스는 권한 600 파일
 - [x] PySide6 없이 설치 가능하게 의존성 분리 (데스크톱 의존성은 uv `desktop` 그룹)
 - [x] 가족 정보 없는 제네릭 스킬 `skills/songpa/SKILL.md`, 네트워크 전제조건 명시
@@ -22,7 +22,7 @@
 
 - [x] iCloud Drive에 배포된 동작 검증 위젯을 제네릭 버전으로 정리해 배포 (`scriptable/`)
 - [x] 계정 설정 방식 문서화 (`songpa-accounts.js`, 입력받아 키체인 저장)
-- Scriptable은 JavaScript라 `core/` 파서를 공유하지 못한다. 사이트 변경 시 `scriptable/songpa-loan-tracker.js`도 함께 고친다.
+- Scriptable은 JavaScript라 `songpa_core/` 파서를 공유하지 못한다. 사이트 변경 시 `scriptable/songpa-loan-tracker.js`도 함께 고친다.
 
 ## 전제조건 (공통)
 

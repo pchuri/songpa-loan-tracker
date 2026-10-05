@@ -1,6 +1,6 @@
-"""core 조회 결과를 사람·AI가 읽기 좋은 형태로 바꾼다.
+"""songpa_core 조회 결과를 사람·AI가 읽기 좋은 형태로 바꾼다.
 
-core는 대출 중이 아닌 상호대차 건의 상태(입수·발송 등)를 due_date 칸에 넣어 준다.
+songpa_core는 대출 중이 아닌 상호대차 건의 상태(입수·발송 등)를 due_date 칸에 넣어 준다.
 여기서 그것을 status/due_date/days_left로 풀어 둔다.
 """
 
@@ -9,7 +9,7 @@ from __future__ import annotations
 import re
 from datetime import date, datetime
 
-from core.splib import ACTIVE_DOORAE_STATUSES
+from songpa_core.splib import ACTIVE_DOORAE_STATUSES
 
 LOANED = "loaned"
 READY_FOR_PICKUP = "ready_for_pickup"
