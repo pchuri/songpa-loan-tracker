@@ -204,10 +204,10 @@ def write_html(report: dict, due_soon: int, path: Path | None = None) -> Path:
             pass
     else:
         path.parent.mkdir(parents=True, exist_ok=True)
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_BINARY", 0), 0o600)
     if hasattr(os, "fchmod"):
         os.fchmod(fd, 0o600)  # 이미 있던 파일은 O_CREAT 권한이 적용되지 않는다.
-    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+    with os.fdopen(fd, "w", encoding="utf-8", newline="") as fh:
         fh.write(render_html(report, due_soon))
     return path
 

@@ -1,4 +1,5 @@
 import json
+import os
 from datetime import datetime
 
 import pytest
@@ -91,6 +92,7 @@ def test_html_escapes_titles_and_follows_dark_mode(report):
     assert "⚠️ 조회 실패" in page
 
 
+@pytest.mark.skipif(os.name == "nt", reason="Windows에는 POSIX 파일 권한이 없다")
 def test_html_file_is_private(tmp_path, report):
     path = write_html(report, 3, tmp_path / "out" / "latest.html")
 
@@ -191,7 +193,10 @@ def test_unreadable_due_date_stays_a_loan_not_a_transfer():
     assert books["연장한 책"]["due_date"] == "2026.10.10"
     assert books["날짜 없는 책"]["status"] == "loaned" and books["날짜 없는 책"]["days_left"] is None
     assert books["모르는 상태"]["status"] == "loaned" and books["모르는 상태"]["due_date"] == "입수취소"
-    assert "입수취소" in render_text(report, columns=120)
+    text = render_text(report, columns=120)
+    assert "None" not in text
+    assert "반납일?    날짜 없는 책  거마" in text
+    assert text.count("입수취소") == 1
     assert "입수취소" in render_html(report)
 
 
@@ -201,7 +206,11 @@ def test_text_drops_control_characters_from_site_data(report):
 
     assert "\x1b[2J" not in text and "변[2J신" in text
 
+    report["accounts"][0]["books"][0]["title"] = "변\u202e신"
+    assert "\u202e" not in render_text(report, columns=120)
 
+
+@pytest.mark.skipif(os.name == "nt", reason="Windows에는 POSIX 파일 권한이 없다")
 def test_existing_html_file_is_made_private_and_custom_folder_left_alone(tmp_path, report):
     folder = tmp_path / "shared"
     folder.mkdir(mode=0o755)
@@ -227,3 +236,36 @@ def test_notify_falls_back_when_termux_notification_hangs(monkeypatch, report):
 
     monkeypatch.setattr(notify.subprocess, "run", hang)
     assert notify.send_notification(report) is False
+
+
+def test_notify_fallback_prints_cleaned_text_when_sending_fails(monkeypatch, tmp_path, capsys):
+    from songpa_cli import notify
+
+    monkeypatch.setattr(notify, "send_notification", lambda report, due_soon=3: False)
+    infos = [dict(INFOS[0], books=[dict(INFOS[0]["books"][3], title="변\x1b]0;hacked\x07신")]), INFOS[1]]
+    store = AccountStore(tmp_path, use_keyring=False)
+    for c in CREDENTIALS:
+        store.add(c["label"], c["userId"], c["password"])
+    monkeypatch.setattr(app, "AccountStore", lambda: store)
+    monkeypatch.setattr(app, "fetch_report", lambda creds: build_report(creds, infos, now=NOW))
+
+    with pytest.raises(SystemExit):
+        app.main(["--notify"])
+    out = capsys.readouterr()
+
+    assert "알림을 보내지 못해" in out.err
+    assert "송파도서관: 찾아올 책" in out.out
+    assert "\x1b" not in out.out and "\x07" not in out.out
+
+
+def test_password_stdin_requires_label_and_id(monkeypatch, tmp_path, capsys):
+    store = AccountStore(tmp_path, use_keyring=False)
+    monkeypatch.setattr(app, "AccountStore", lambda: store)
+    monkeypatch.setattr("sys.stdin", __import__("io").StringIO("secret\n"))
+
+    with pytest.raises(SystemExit) as exc:
+        app.main(["accounts", "add", "--password-stdin"])
+
+    assert exc.value.code == 2
+    assert "--label" in capsys.readouterr().err
+    assert store.entries() == []

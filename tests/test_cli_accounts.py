@@ -108,6 +108,7 @@ def test_broken_file_is_reported_not_overwritten(tmp_path):
     assert (tmp_path / "accounts.json").read_text(encoding="utf-8") == "{broken"
 
 
+@pytest.mark.skipif(os.name == "nt", reason="Windows에는 POSIX 파일 권한이 없다")
 def test_existing_config_folder_permissions_are_left_alone(tmp_path):
     tmp_path.chmod(0o755)
 

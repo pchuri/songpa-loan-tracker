@@ -86,7 +86,7 @@
 ### 설치
 
 ```bash
-# PC: uv가 있으면 (https://docs.astral.sh/uv/)
+# PC: uv와 git이 있으면 (https://docs.astral.sh/uv/, Windows는 https://git-scm.com/)
 uv tool install git+https://github.com/pchuri/songpa-loan-tracker
 
 # 안드로이드 Termux

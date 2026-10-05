@@ -50,7 +50,7 @@ def _accounts_parser() -> argparse.ArgumentParser:
     add.add_argument("--label", help="화면에 보일 이름")
     add.add_argument("--id", dest="user_id", help="도서관 홈페이지 아이디")
     add.add_argument("--password-stdin", action="store_true",
-                     help="비밀번호를 표준입력 첫 줄에서 읽기 (입력 화면 없이 설정할 때)")
+                     help="비밀번호를 표준입력 첫 줄에서 읽기 (입력 화면 없이 설정할 때, --label·--id 필수)")
     sub.add_parser("list", help="등록된 계정 보기")
     remove = sub.add_parser("remove", help="계정 삭제")
     remove.add_argument("name", metavar="이름", help="삭제할 계정의 이름이나 아이디")
@@ -65,7 +65,11 @@ def _prompt(text: str) -> str:
 
 
 def run_accounts(argv: list[str], store: AccountStore) -> int:
-    args = _accounts_parser().parse_args(argv)
+    parser = _accounts_parser()
+    args = parser.parse_args(argv)
+    if args.command == "add" and args.password_stdin and not (args.label and args.user_id):
+        # 이름·아이디를 물어보는 input()이 표준입력의 비밀번호 줄을 먼저 읽어 버린다.
+        parser.error("--password-stdin을 쓸 때는 --label과 --id를 함께 주세요.")
     try:
         if args.command == "list":
             entries = store.entries()
@@ -137,12 +141,15 @@ def run_status(argv: list[str], store: AccountStore) -> int:
             print(f"HTML 저장: {path}")
     elif args.notify:
         from songpa_cli.notify import build_notification, send_notification
+        from songpa_cli.text import clean
 
         if not send_notification(report, args.due_soon):
             title, content, _ = build_notification(report, args.due_soon)
             print("알림을 보내지 못해 대신 출력합니다. (Termux에서 `pkg install termux-api`와 "
                   "Termux:API 앱 설치·알림 권한이 필요합니다)", file=sys.stderr)
-            print(f"{title}\n\n{content}")
+            print(clean(title))
+            print()
+            print("\n".join(clean(line) for line in content.splitlines()))
     else:
         from songpa_cli.text import render_text
 

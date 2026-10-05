@@ -83,11 +83,11 @@ class AccountStore:
                 pass
         # 중간에 끊겨도 기존 파일이 반쯤 지워지지 않게 임시 파일에 쓰고 바꿔 끼운다.
         tmp_path = self.path.with_name(self.path.name + ".tmp")
-        fd = os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        fd = os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_BINARY", 0), 0o600)
         try:
             if hasattr(os, "fchmod"):
                 os.fchmod(fd, 0o600)  # 남아 있던 임시 파일에는 O_CREAT 권한이 적용되지 않는다.
-            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            with os.fdopen(fd, "w", encoding="utf-8", newline="") as fh:
                 json.dump({"accounts": accounts}, fh, ensure_ascii=False, indent=2)
             os.replace(tmp_path, self.path)
         except BaseException:
