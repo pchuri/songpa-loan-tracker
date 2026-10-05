@@ -65,6 +65,11 @@ async function checkUpdateIfNeeded() {
   return { hasUpdate: false };
 }
 
+// 위젯 색: 기기 라이트/다크 설정에 따라 자동으로 바뀐다
+function themed(light, dark) {
+  return Color.dynamic(new Color(light), new Color(dark));
+}
+
 // 한글 세 글자 이름이면 성을 빼고 부른다 (예: 홍길동 → 길동). 그 외에는 첫 단어.
 function shortName(name) {
   const first = (name || "").split(" ")[0];
@@ -461,7 +466,7 @@ function parseMemberBooks(loanRows, dooRows, userName) {
 // ==========================================
 async function createWidget(data, updateInfo) {
   const widget = new ListWidget();
-  widget.backgroundColor = new Color("#1C1C1E");
+  widget.backgroundColor = themed("#FFFFFF", "#1C1C1E");
 
   let allLoans = [];
   let allItems = [];
@@ -482,7 +487,7 @@ async function createWidget(data, updateInfo) {
   header.centerAlignContent();
   const title = header.addText("📚 송파도서관");
   title.font = Font.boldSystemFont(13);
-  title.textColor = new Color("#FFFFFF");
+  title.textColor = themed("#000000", "#FFFFFF");
   header.addSpacer();
 
   let badgeStr = `총 ${allItems.length}권`;
@@ -493,7 +498,7 @@ async function createWidget(data, updateInfo) {
   }
   const countBadge = header.addText(badgeStr);
   countBadge.font = Font.systemFont(11);
-  countBadge.textColor = totalPickups > 0 ? new Color("#FFD60A") : new Color("#8E8E93");
+  countBadge.textColor = totalPickups > 0 ? themed("#9A6700", "#FFD60A") : themed("#6C6C70", "#8E8E93");
 
   widget.addSpacer(6);
 
@@ -504,27 +509,27 @@ async function createWidget(data, updateInfo) {
     row.centerAlignContent();
 
     let tagText = "";
-    let tagColor = new Color("#30D158");
+    let tagColor = themed("#248A3D", "#30D158");
 
     if (item.statusType === "픽업필요") {
       tagText = "[픽업필요]";
-      tagColor = new Color("#FFD60A");
+      tagColor = themed("#9A6700", "#FFD60A");
     } else if (item.statusType === "이동중") {
       tagText = "[이동중]";
-      tagColor = new Color("#64D2FF");
+      tagColor = themed("#0071A4", "#64D2FF");
     } else {
       if (item.diffDays < 0) {
         tagText = `[연체 ${Math.abs(item.diffDays)}일]`;
-        tagColor = new Color("#FF453A");
+        tagColor = themed("#D70015", "#FF453A");
       } else if (item.diffDays === 0) {
         tagText = "[오늘 반납]";
-        tagColor = new Color("#FF453A");
+        tagColor = themed("#D70015", "#FF453A");
       } else if (item.diffDays <= 3) {
         tagText = `[D-${item.diffDays}]`;
-        tagColor = new Color("#FF9F0A");
+        tagColor = themed("#C93400", "#FF9F0A");
       } else {
         tagText = `[D-${item.diffDays}]`;
-        tagColor = new Color("#30D158");
+        tagColor = themed("#248A3D", "#30D158");
       }
     }
 
@@ -534,7 +539,7 @@ async function createWidget(data, updateInfo) {
 
     const label = row.addText(`${item.user.split(" ")[0]}: ${item.title} (${item.shortLib})`);
     label.font = Font.systemFont(11);
-    label.textColor = new Color("#FFFFFF");
+    label.textColor = themed("#000000", "#FFFFFF");
     label.lineLimit = 1;
 
     widget.addSpacer(3);
@@ -547,7 +552,7 @@ async function createWidget(data, updateInfo) {
     : `터치하면 계정별 도서 상세를 봅니다`;
   const footer = widget.addText(footerText);
   footer.font = Font.systemFont(9);
-  footer.textColor = hasUpdate ? new Color("#FF9F0A") : new Color("#8E8E93");
+  footer.textColor = hasUpdate ? themed("#C93400", "#FF9F0A") : themed("#6C6C70", "#8E8E93");
 
   return widget;
 }
@@ -658,7 +663,7 @@ function buildHtmlPage(data) {
           <div class="stats-row">
             <span>대출 ${d.loanCount || 0}권</span>
             ${d.pickupCount > 0 ? `<span style="color:var(--yellow); font-weight:800;">· 🔔 픽업필요 ${d.pickupCount}권</span>` : ""}
-            ${d.transitCount > 0 ? `<span style="color:#64D2FF;">· 🚚 이동중 ${d.transitCount}권</span>` : ""}
+            ${d.transitCount > 0 ? `<span style="color:var(--sky);">· 🚚 이동중 ${d.transitCount}권</span>` : ""}
           </div>
         </div>
 
@@ -693,17 +698,35 @@ function buildHtmlPage(data) {
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
 <title>송파도서관 대출 현황</title>
 <style>
+  /* 기기 설정(라이트/다크, 자동 전환 포함)을 따라간다. 다크는 기존 색 그대로, 라이트는 흰 바탕에서 읽히게 진하게. */
   :root {
-    --bg-color: #000000;
-    --card-bg: #1C1C1E;
-    --card-border: #2C2C2E;
-    --text-primary: #FFFFFF;
-    --text-secondary: #8E8E93;
-    --green: #30D158;
-    --blue: #0A84FF;
-    --red: #FF453A;
-    --orange: #FF9F0A;
-    --yellow: #FFD60A;
+    color-scheme: light dark;
+    --bg-color: #F2F2F7; --card-bg: #FFFFFF; --card-border: #E5E5EA;
+    --text-primary: #000000; --text-secondary: #6C6C70; --text-title: #1C1C1E;
+    --text-loc: #6C6C70; --text-faint: #8E8E93; --text-summary: #3A3A3C;
+    --chip: #E5E5EA; --chip-count: rgba(0,0,0,0.08); --overlay: rgba(242,242,247,0.85);
+    --badge-bg: rgba(0,0,0,0.06); --line: rgba(0,0,0,0.08); --line-soft: rgba(0,0,0,0.05);
+    --summary-bg: rgba(0,0,0,0.04); --shadow: rgba(0,0,0,0.08);
+    --green: #248A3D; --blue: #0066CC; --red: #D70015; --orange: #C93400; --yellow: #9A6700; --sky: #0071A4;
+    --tint-yellow: rgba(255,204,0,0.2); --tint-yellow-border: rgba(154,103,0,0.4);
+    --tint-blue: rgba(0,113,164,0.12); --tint-blue-border: rgba(0,113,164,0.35);
+    --tint-green: rgba(36,138,61,0.12);
+    --tint-red: rgba(215,0,21,0.08); --tint-red-border: rgba(215,0,21,0.3);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg-color: #000000; --card-bg: #1C1C1E; --card-border: #2C2C2E;
+      --text-primary: #FFFFFF; --text-secondary: #8E8E93; --text-title: #F2F2F7;
+      --text-loc: #98989D; --text-faint: #636366; --text-summary: #D1D1D6;
+      --chip: #2C2C2E; --chip-count: rgba(255,255,255,0.2); --overlay: rgba(0,0,0,0.85);
+      --badge-bg: rgba(255,255,255,0.12); --line: rgba(255,255,255,0.08); --line-soft: rgba(255,255,255,0.06);
+      --summary-bg: rgba(255,255,255,0.05); --shadow: rgba(0,0,0,0.4);
+      --green: #30D158; --blue: #0A84FF; --red: #FF453A; --orange: #FF9F0A; --yellow: #FFD60A; --sky: #64D2FF;
+      --tint-yellow: rgba(255,214,10,0.18); --tint-yellow-border: rgba(255,214,10,0.4);
+      --tint-blue: rgba(10,132,255,0.18); --tint-blue-border: rgba(10,132,255,0.4);
+      --tint-green: rgba(48,209,88,0.15);
+      --tint-red: rgba(255,69,58,0.15); --tint-red-border: rgba(255,69,58,0.35);
+    }
   }
   * { box-sizing: border-box; }
   body {
@@ -723,7 +746,7 @@ function buildHtmlPage(data) {
     left: 0;
     right: 0;
     height: var(--safe-top);
-    background: #000000;
+    background: var(--bg-color);
     z-index: 200;
   }
   .app-header {
@@ -748,7 +771,7 @@ function buildHtmlPage(data) {
     padding: 6px 0 14px 0;
     position: sticky;
     top: var(--safe-top);
-    background: rgba(0,0,0,0.85);
+    background: var(--overlay);
     backdrop-filter: blur(20px);
     -webkit-backdrop-filter: blur(20px);
     z-index: 100;
@@ -756,8 +779,8 @@ function buildHtmlPage(data) {
   }
   .tabs-container::-webkit-scrollbar { display: none; }
   .tab-pill {
-    background: #2C2C2E;
-    color: #FFFFFF;
+    background: var(--chip);
+    color: var(--text-primary);
     padding: 6px 12px;
     border-radius: 16px;
     font-size: 13px;
@@ -769,7 +792,7 @@ function buildHtmlPage(data) {
     gap: 4px;
   }
   .tab-count {
-    background: rgba(255,255,255,0.2);
+    background: var(--chip-count);
     border-radius: 10px;
     padding: 1px 6px;
     font-size: 11px;
@@ -785,12 +808,12 @@ function buildHtmlPage(data) {
     border-radius: 18px;
     padding: 18px 16px;
     margin-bottom: 18px;
-    box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+    box-shadow: 0 4px 16px var(--shadow);
     scroll-margin-top: 50px;
   }
   .card-header {
     margin-bottom: 12px;
-    border-bottom: 1px solid rgba(255,255,255,0.08);
+    border-bottom: 1px solid var(--line);
     padding-bottom: 10px;
   }
   .user-row {
@@ -804,8 +827,8 @@ function buildHtmlPage(data) {
     letter-spacing: -0.3px;
   }
   .badge-total {
-    background: rgba(255,255,255,0.12);
-    color: #FFFFFF;
+    background: var(--badge-bg);
+    color: var(--text-primary);
     padding: 3px 9px;
     border-radius: 12px;
     font-size: 12px;
@@ -820,11 +843,11 @@ function buildHtmlPage(data) {
   }
   .stat-inter { color: var(--green); }
   .stat-pickup { color: var(--yellow); }
-  .stat-transit { color: #64D2FF; }
+  .stat-transit { color: var(--sky); }
   .err-box {
-    background: rgba(255, 69, 58, 0.15);
-    border: 1px solid rgba(255, 69, 58, 0.35);
-    color: #FF453A;
+    background: var(--tint-red);
+    border: 1px solid var(--tint-red-border);
+    color: var(--red);
     border-radius: 10px;
     padding: 8px 12px;
     font-size: 12px;
@@ -832,22 +855,22 @@ function buildHtmlPage(data) {
     font-weight: 600;
   }
   .lib-summary {
-    background: rgba(255,255,255,0.05);
+    background: var(--summary-bg);
     border-radius: 10px;
     padding: 8px 12px;
     font-size: 12px;
-    color: #D1D1D6;
+    color: var(--text-summary);
     line-height: 1.5;
     margin-bottom: 12px;
   }
   .lib-summary strong {
-    color: #FFFFFF;
+    color: var(--text-primary);
   }
   .pickup-highlight { color: var(--yellow) !important; }
-  .transit-highlight { color: #64D2FF !important; }
+  .transit-highlight { color: var(--sky) !important; }
   .tag-pickup {
     display: inline-block;
-    background: rgba(255, 214, 10, 0.18);
+    background: var(--tint-yellow);
     color: var(--yellow);
     font-size: 10px;
     font-weight: 700;
@@ -857,8 +880,8 @@ function buildHtmlPage(data) {
   }
   .tag-transit {
     display: inline-block;
-    background: rgba(10, 132, 255, 0.18);
-    color: #64D2FF;
+    background: var(--tint-blue);
+    color: var(--sky);
     font-size: 10px;
     font-weight: 700;
     padding: 1px 5px;
@@ -874,14 +897,14 @@ function buildHtmlPage(data) {
     white-space: nowrap;
   }
   .badge-pickup {
-    background: rgba(255, 214, 10, 0.2);
+    background: var(--tint-yellow);
     color: var(--yellow);
-    border: 1px solid rgba(255, 214, 10, 0.4);
+    border: 1px solid var(--tint-yellow-border);
   }
   .badge-transit {
-    background: rgba(10, 132, 255, 0.2);
-    color: #64D2FF;
-    border: 1px solid rgba(10, 132, 255, 0.4);
+    background: var(--tint-blue);
+    color: var(--sky);
+    border: 1px solid var(--tint-blue-border);
   }
   .book-table {
     width: 100%;
@@ -894,11 +917,11 @@ function buildHtmlPage(data) {
     font-size: 11px;
     font-weight: 500;
     padding-bottom: 8px;
-    border-bottom: 1px solid rgba(255,255,255,0.1);
+    border-bottom: 1px solid var(--line);
   }
   .book-table td {
     padding: 11px 4px;
-    border-bottom: 1px solid rgba(255,255,255,0.06);
+    border-bottom: 1px solid var(--line-soft);
     vertical-align: top;
   }
   .book-table tr:last-child td {
@@ -917,14 +940,14 @@ function buildHtmlPage(data) {
   .lib-main {
     font-size: 12px;
     font-weight: 700;
-    color: #FFFFFF;
+    color: var(--text-primary);
   }
   .inter-highlight {
-    color: #30D158 !important;
+    color: var(--green) !important;
   }
   .lib-sub {
     font-size: 10px;
-    color: #8E8E93;
+    color: var(--text-secondary);
     margin-top: 2px;
   }
   .col-title {
@@ -934,22 +957,22 @@ function buildHtmlPage(data) {
     font-size: 13px;
     font-weight: 500;
     line-height: 1.35;
-    color: #F2F2F7;
+    color: var(--text-title);
   }
   .loc-detail {
     font-size: 11px;
-    color: #98989D;
+    color: var(--text-loc);
     margin-top: 4px;
   }
   .loc-detail strong {
-    color: #30D158;
+    color: var(--green);
   }
   .prov-text {
-    color: #636366;
+    color: var(--text-faint);
   }
   .tag-booksole {
     display: inline-block;
-    background: rgba(48, 209, 88, 0.15);
+    background: var(--tint-green);
     color: var(--green);
     font-size: 10px;
     font-weight: 700;
@@ -1007,14 +1030,14 @@ async function main() {
   if (!accounts || accounts.length === 0) {
     if (config.runsInWidget) {
       const widget = new ListWidget();
-      widget.backgroundColor = new Color("#1C1C1E");
+      widget.backgroundColor = themed("#FFFFFF", "#1C1C1E");
       const title = widget.addText("⚠️ 계정 설정 필요");
       title.font = Font.boldSystemFont(13);
-      title.textColor = new Color("#FF9F0A");
+      title.textColor = themed("#C93400", "#FF9F0A");
       widget.addSpacer(4);
       const sub = widget.addText("Scriptable 앱에서 계정설정 스크립트(songpa-accounts)를 실행해 계정을 먼저 저장해주세요.");
       sub.font = Font.systemFont(11);
-      sub.textColor = new Color("#FFFFFF");
+      sub.textColor = themed("#000000", "#FFFFFF");
       Script.setWidget(widget);
     } else {
       const alert = new Alert();
