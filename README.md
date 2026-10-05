@@ -134,7 +134,7 @@ songpa --due-soon 5       # 반납 임박 기준 바꾸기 (기본 3일)
   다른 사람과 같이 쓰는 기기에서는 쓰지 마세요.
   계정 정보는 도서관 홈페이지 로그인에만 쓰이고 다른 곳으로 전송되지 않습니다.
 - **비공식 도구**: 송파구립도서관과 관계없는 개인 프로젝트입니다. 도서관 홈페이지 구조가 바뀌면 조회가 안 될 수 있습니다.
-  (데스크톱·`songpa` 명령어는 `core/`, 아이폰은 `scriptable/songpa-loan-tracker.js`의 파서를 함께 고칩니다.)
+  (데스크톱·`songpa` 명령어는 `songpa_core/`, 아이폰은 `scriptable/songpa-loan-tracker.js`의 파서를 함께 고칩니다.)
 
 ---
 
@@ -143,11 +143,11 @@ songpa --due-soon 5       # 반납 임박 기준 바꾸기 (기본 3일)
 ## 프로젝트 구조
 
 - `src/main_app.py` — PySide6 GUI 메인 애플리케이션
-- `core/` — 도서관 웹 스크래핑 로직 (데스크톱 앱과 `songpa` 명령어가 같이 씀)
+- `songpa_core/` — 도서관 웹 스크래핑 로직 (데스크톱 앱과 `songpa` 명령어가 같이 씀)
 - `songpa_cli/` — `songpa` 명령어 (`pyproject.toml`의 기본 의존성만 사용)
 - `skills/songpa/` — AI 코딩 에이전트용 스킬 설명
 - `songpa-loan-tracker.spec` — PyInstaller 빌드 설정
-- `scriptable/` — 아이폰 Scriptable 스크립트 (JavaScript, `core/`와 별도 파서)
+- `scriptable/` — 아이폰 Scriptable 스크립트 (JavaScript, `songpa_core/`와 별도 파서)
 - `docs/images/` — README 스크린샷
 
 ## 개발 환경 설정

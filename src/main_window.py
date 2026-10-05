@@ -28,7 +28,7 @@ from PySide6.QtWidgets import (
 )
 from qasync import asyncSlot
 
-from core.splib import get_infos_async
+from songpa_core.splib import get_infos_async
 from src.book_status import compute_book_status
 from src.config_store import ConfigStore
 from src.reservation_status import compute_reservation_status, group_key, is_ready_for_pickup

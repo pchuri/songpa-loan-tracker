@@ -2,7 +2,7 @@ from datetime import datetime, timedelta
 
 import pytest
 
-from core.splib import MAX_PAGES, parse_max_page, parse_reservation_status
+from songpa_core.splib import MAX_PAGES, parse_max_page, parse_reservation_status
 from src.reservation_status import compute_reservation_status, group_key, is_ready_for_pickup
 
 

@@ -1,7 +1,7 @@
 import pytest
 
-from core.splib import parse_doorae_status, parse_loan_status, parse_reservation_status
-from core.splib_utils import abbreviate_library_name
+from songpa_core.splib import parse_doorae_status, parse_loan_status, parse_reservation_status
+from songpa_core.splib_utils import abbreviate_library_name
 
 
 @pytest.mark.parametrize("full_name, expected", [

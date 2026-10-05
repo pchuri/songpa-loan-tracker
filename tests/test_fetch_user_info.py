@@ -2,8 +2,8 @@ import asyncio
 
 import pytest
 
-from core import splib
-from core.config import INDEX_URL, INTERLIBRARY_LOAN_URL, LOAN_URL, RESERVATION_URL
+from songpa_core import splib
+from songpa_core.config import INDEX_URL, INTERLIBRARY_LOAN_URL, LOAN_URL, RESERVATION_URL
 
 INDEX_HTML = f"""
 <div class="barcodeInfo">테스터<span>12345</span></div>

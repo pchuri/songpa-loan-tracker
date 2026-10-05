@@ -2,8 +2,8 @@ from urllib.parse import urlparse
 
 from bs4 import BeautifulSoup
 
-from core.config import LOAN_URL, INTERLIBRARY_LOAN_URL
-from core.http_utils import AuthError
+from songpa_core.config import LOAN_URL, INTERLIBRARY_LOAN_URL
+from songpa_core.http_utils import AuthError
 
 
 # 지역에서 통하는 이름이 정식 명칭과 다른 분관들.
