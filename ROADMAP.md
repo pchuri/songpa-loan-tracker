@@ -7,7 +7,7 @@
 
 - [x] `songpa-loan-tracker` 리포 생성 (히스토리 없는 새 출발)
 - [x] jenaonbot 명칭 제거, 자동 업데이트 탑재
-- [ ] public 전환
+- [x] public 전환
 - [ ] Windows 배포 (songpa-loan-tracker.exe)
 
 ## Phase 2 — 코딩 에이전트용 스킬 (제네릭 버전)

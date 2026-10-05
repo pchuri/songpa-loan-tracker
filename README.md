@@ -1,79 +1,51 @@
 # songpa-loan-tracker
 
-송파구립도서관(splib.or.kr) 대출·예약 현황을 한눈에 보여주는 macOS/Windows 데스크톱 앱입니다.
-PySide6로 구현되었으며, 별도의 백엔드 없이 독립 실행됩니다. 도서관 홈페이지에 직접 로그인해서
-조회하므로, 클라우드 서버에서는 접속이 차단되는 환경에서도 집 PC에서는 정상 동작합니다.
+송파구립도서관(splib.or.kr) 대출·예약·상호대차 현황을 한눈에 보여주는 도구입니다.
+가족처럼 여러 계정을 한 번에 조회하고, 반납일이 가까운 책과 찾아올 책을 먼저 보여줍니다.
 
-> 스크린샷 자리 (TODO: 대출 탭 / 예약 탭 캡처 추가)
+| 형태 | 설명 |
+|---|---|
+| 🖥️ **데스크톱 앱** (macOS/Windows) | PySide6 앱. 실행 파일 하나로 동작합니다. |
+| 📱 **아이폰** ([Scriptable](https://scriptable.app)) | 홈 화면 위젯 + 계정별 카드 화면. [`scriptable/`](scriptable/) 참고 |
 
-## 다운로드
+별도의 서버 없이 PC나 휴대폰이 도서관 홈페이지에 직접 로그인해서 조회합니다.
 
-별도 설치 없이 실행 파일 하나로 동작합니다. [Releases](../../releases)의 `latest-build`에서
-최신 빌드를 받으세요.
+## 스크린샷
 
-- macOS: `songpa-loan-tracker-macos.zip` → 압축 해제 후 `songpa-loan-tracker.app` 실행
-- Windows: `songpa-loan-tracker.exe` 실행
+**데스크톱 — 대출 현황**: 반납 임박순 카드, 사용자 칩에 `대출권수 (상호대차권수)` 표시
 
-첫 실행 시 도서관 회원번호와 비밀번호를 설정 탭에 입력하면 됩니다. 입력한 계정 정보는
-PC에만 암호화되어 저장되고 외부로 전송되지 않습니다.
+![데스크톱 대출 현황](docs/images/desktop-loans.png)
 
-## 아이폰 (Scriptable)
+**데스크톱 — 예약 현황**: 수령 대기 예약을 맨 위에, 같은 책 예약은 나란히
 
-아이폰 홈 화면 위젯으로도 볼 수 있습니다. [Scriptable](https://scriptable.app) 앱용 스크립트와 설치 방법은
-[`scriptable/`](scriptable/) 폴더를 참고하세요.
+![데스크톱 예약 현황](docs/images/desktop-reservations.png)
 
-## 자동 업데이트 (Windows)
+**아이폰 (Scriptable)** — 기기 설정에 따라 라이트/다크 모드로 표시
 
-앱을 실행하면 새 버전이 있는지 백그라운드에서 자동으로 확인합니다.
-새 버전이 있으면 "업데이트하고 다시 시작할까요?"라고 물어보고,
-승인하면 다운로드 후 자동으로 교체하고 다시 시작됩니다.
+<img src="docs/images/scriptable-light-dark.png" alt="아이폰 Scriptable 화면 (라이트/다크)" width="600">
 
-- `main` 브랜치에 push되면 GitHub Actions가 자동으로 빌드하고
-  `latest-build` 릴리스를 갱신합니다.
-- 업데이트 여부는 리포 루트의 `VERSION` 파일로 결정됩니다.
-  사용자에게 새 버전을 알리고 싶을 때만 `VERSION`의 숫자를 올리고
-  push하세요 (예: `1.0.0` → `1.1.0`).
-  문서만 고친 커밋에는 `VERSION`을 올리지 않으면
-  사용자에게 업데이트 안내가 뜨지 않습니다.
-- 레포가 비공개일 때는 Actions 시크릿 `UPDATER_TOKEN`
-  (이 레포에 대한 contents 읽기 전용 fine-grained 토큰)을 등록해야
-  앱이 릴리스를 내려받을 수 있습니다. 레포를 공개로 전환하면
-  토큰 없이 동작합니다.
+> 스크린샷은 예시 데이터로 만든 화면입니다.
 
 ## 주요 기능
 
-- 📚 **대출 도서 관리**: 계층형 트리 뷰로 사용자별 대출 현황 확인
-- 🔖 **예약 도서 관리**: 예약 순번과 수령 마감일 확인, 같은 책을 여러 도서관에 걸어둔 예약은 책별로 묶어 정렬
-- 🔍 **정렬 및 필터링**: 반납일/이름/도서관별 정렬, 상호대차 필터링
-- ⏰ **자동 새로고침**: 5분/10분/30분/1시간 간격 선택 가능
-- 🌓 **다크모드**: 라이트/다크 테마 전환
-- ⌨️ **키보드 단축키**: F5(새로고침), Ctrl+1(대출)/Ctrl+2(예약)/Ctrl+3(설정)
-- 👥 **다중 사용자**: 여러 도서관 계정 관리
+- 📚 **대출 도서**: 반납일·이름·도서관별 정렬, 상호대차만 보기, 긴급·임박·대기 요약
+- 🔁 **상호대차(책솔이)**: 수령 도서관, 소장 도서관, 진행 상태(입수·발송·요청중) 표시
+- 🔖 **예약 도서**: 예약 순번과 수령 마감일, 같은 책을 여러 도서관에 걸어둔 예약은 책별로 묶어 정렬
+- 👥 **여러 계정**: 가족 계정을 한 번에 조회, 사용자별 필터
+- ⏰ **자동 새로고침**: 5분/10분/30분/1시간 간격 선택
+- 🌓 **다크모드**, ⌨️ **키보드 단축키**: F5(새로고침), Ctrl+1(대출)/Ctrl+2(예약)/Ctrl+3(설정)
 
-## 프로젝트 구조
+## 다운로드 (데스크톱)
 
-- `src/main_app.py` — PySide6 GUI 메인 애플리케이션
-- `core/` — 도서관 웹 스크래핑 로직
-- `songpa-loan-tracker.spec` — PyInstaller 빌드 설정
+[Releases](../../releases)의 `latest-build`에서 최신 빌드를 받으세요. 설치 과정은 없습니다.
 
-## 개발 환경 설정
+- **macOS**: `songpa-loan-tracker-macos.zip` → 압축을 풀고 `songpa-loan-tracker.app` 실행
+  - 서명되지 않은 앱이라 처음 실행할 때 "확인되지 않은 개발자" 경고가 뜰 수 있습니다.
+    앱을 **우클릭 → 열기**로 한 번 실행하면 이후에는 그냥 열립니다. 그래도 막히면
+    **시스템 설정 → 개인정보 보호 및 보안**에서 **그래도 열기**를 누르세요.
+- **Windows**: `songpa-loan-tracker.exe` 실행. 새 버전이 나오면 앱이 알려주고 자동으로 교체합니다.
 
-### 1. uv 설치 및 의존성 설치
-```bash
-cd songpa-loan-tracker
-
-# uv 설치 (최초 1회)
-curl -LsSf https://astral.sh/uv/install.sh | sh
-source ~/.local/bin/env
-
-# 의존성 설치 및 가상환경 생성
-uv sync
-
-# 앱 실행
-uv run src/main_app.py
-```
-
-## 사용 방법
+## 사용 방법 (데스크톱)
 
 1. **설정 탭**에서 도서관 계정 추가
    - 회원번호와 비밀번호 입력
@@ -95,6 +67,58 @@ uv run src/main_app.py
    - 다크모드 활성화
 
 설정은 `~/.songpa-loan-tracker/config.json`에 자동 저장됩니다.
+
+## 아이폰 (Scriptable)
+
+[Scriptable](https://scriptable.app) 앱용 스크립트입니다. 홈 화면 위젯에서 반납이 가까운 책과 찾아올 책을 보여주고,
+위젯을 누르면 계정별 카드 화면이 열립니다. 설치·계정 설정·자동 업데이트는 [`scriptable/README.md`](scriptable/README.md)를 참고하세요.
+
+## 알아 두기
+
+- **네트워크**: splib.or.kr에 직접 닿는 네트워크에서만 동작합니다. 집·휴대폰(LTE/5G)에서는 정상이지만,
+  클라우드 서버나 일부 회사·기관 네트워크(VPN 포함)에서는 도서관 홈페이지 접속이 막혀 조회가 실패할 수 있습니다.
+- **계정 정보**: 데스크톱은 PC에 암호화해서(암호화 키는 OS 키체인) 저장하고, 아이폰은 iOS 키체인에 저장합니다.
+  계정 정보는 도서관 홈페이지 로그인에만 쓰이고 다른 곳으로 전송되지 않습니다.
+- **비공식 도구**: 송파구립도서관과 관계없는 개인 프로젝트입니다. 도서관 홈페이지 구조가 바뀌면 조회가 안 될 수 있습니다.
+  (데스크톱은 `core/`, 아이폰은 `scriptable/songpa-loan-tracker.js`의 파서를 함께 고칩니다.)
+
+---
+
+# 개발자용
+
+## 프로젝트 구조
+
+- `src/main_app.py` — PySide6 GUI 메인 애플리케이션
+- `core/` — 도서관 웹 스크래핑 로직
+- `songpa-loan-tracker.spec` — PyInstaller 빌드 설정
+- `scriptable/` — 아이폰 Scriptable 스크립트 (JavaScript, `core/`와 별도 파서)
+- `docs/images/` — README 스크린샷
+
+## 개발 환경 설정
+
+### 1. uv 설치 및 의존성 설치
+```bash
+cd songpa-loan-tracker
+
+# uv 설치 (최초 1회)
+curl -LsSf https://astral.sh/uv/install.sh | sh
+source ~/.local/bin/env
+
+# 의존성 설치 및 가상환경 생성
+uv sync
+
+# 앱 실행
+uv run src/main_app.py
+```
+
+## 자동 업데이트 동작 (Windows)
+
+- `main` 브랜치에 push되면 GitHub Actions가 자동으로 빌드하고 `latest-build` 릴리스를 갱신합니다.
+- 앱은 실행할 때 리포 루트의 `VERSION` 파일로 새 버전 여부를 판단합니다.
+  사용자에게 새 버전을 알리고 싶을 때만 `VERSION`의 숫자를 올리고 push하세요 (예: `1.0.0` → `1.1.0`).
+  문서만 고친 커밋에는 `VERSION`을 올리지 않으면 사용자에게 업데이트 안내가 뜨지 않습니다.
+- 리포가 공개 상태라 별도 토큰 없이 릴리스를 내려받습니다.
+  (비공개로 바꾸면 Actions 시크릿 `UPDATER_TOKEN`에 이 리포 contents 읽기 전용 fine-grained 토큰이 필요합니다.)
 
 ## macOS 앱 빌드
 
