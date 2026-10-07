@@ -43,3 +43,7 @@ testpaths = ["tests"]
 
 [tool.uv]
 default-groups = ["desktop", "dev"]
+
+[tool.uv.dependency-groups]
+# python-dotenv>=1.2.2는 Python 3.10 이상이 필요하다. CLI/Termux의 3.9 지원은 유지한다.
+desktop = {requires-python = ">=3.10"}
