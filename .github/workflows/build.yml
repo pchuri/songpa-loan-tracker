@@ -3,6 +3,8 @@ name: build-desktop
 on:
   push:
     branches: [main]
+  pull_request:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -18,13 +20,11 @@ jobs:
       - name: Set up Python
         run: uv python install
       - name: Install dependencies
-        run: |
-          uv sync
-          uv pip install pyinstaller
+        run: uv sync --locked
       - name: Generate version info
         shell: bash
         env:
-          UPDATER_TOKEN: ${{ secrets.UPDATER_TOKEN }}
+          UPDATER_TOKEN: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && secrets.UPDATER_TOKEN || '' }}
         run: |
           SHA="${{ github.sha }}"
           NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -47,6 +47,7 @@ jobs:
       - name: Package app bundle
         run: ditto -c -k --keepParent dist/songpa-loan-tracker.app dist/songpa-loan-tracker-macos.zip
       - name: Upload to latest-build release
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -62,13 +63,11 @@ jobs:
       - name: Set up Python
         run: uv python install
       - name: Install dependencies
-        run: |
-          uv sync
-          uv pip install pyinstaller
+        run: uv sync --locked
       - name: Generate version info
         shell: bash
         env:
-          UPDATER_TOKEN: ${{ secrets.UPDATER_TOKEN }}
+          UPDATER_TOKEN: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && secrets.UPDATER_TOKEN || '' }}
         run: |
           SHA="${{ github.sha }}"
           NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -87,6 +86,7 @@ jobs:
           name: songpa-loan-tracker-windows
           path: dist/songpa-loan-tracker.exe
       - name: Upload to latest-build release
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
