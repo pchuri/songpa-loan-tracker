@@ -1,7 +1,11 @@
+import errno
 import json
 import logging
 import os
 import shutil
+import tempfile
+import time
+from contextlib import contextmanager
 from pathlib import Path
 
 import keyring
@@ -18,6 +22,70 @@ LEGACY_CONFIG_DIRNAME = ".jenaonbot"
 
 logger = logging.getLogger(__name__)
 
+_CONFIG_FIELDS = {"users", "env", "auto_refresh_interval", "dark_mode", "ui_state"}
+_LOCK_TIMEOUT_SECONDS = 2.0
+
+
+def _account_id(user: dict) -> str:
+    # The original config format used label for the login ID.
+    return (user.get("userId") or user.get("label") or "").strip()
+
+
+def _env_section(data: dict) -> dict:
+    return data.get("env", {k: v for k, v in data.items() if k not in _CONFIG_FIELDS})
+
+
+def _validate_config(data: dict) -> None:
+    """Reject lossy/unsafe shapes before decrypting, migrating, or normalizing."""
+    if not isinstance(data, dict):
+        raise ValueError("config must be a JSON object")
+    users = data.get("users", [])
+    if not isinstance(users, list) or any(not isinstance(u, dict) for u in users):
+        raise ValueError("users must be a list of objects")
+    seen = set()
+    for user in users:
+        for field in ("userId", "label"):
+            if user.get(field) is not None:
+                if not isinstance(user[field], str):
+                    raise ValueError(f"{field} must be a string")
+                user[field].encode("utf-8")
+        user_id = _account_id(user)
+        if not user_id or user_id in seen:
+            raise ValueError("each user needs a unique nonempty userId or legacy label")
+        seen.add(user_id)
+        for field in ("password", "encrypted_password"):
+            if field in user:
+                if not isinstance(user[field], str):
+                    raise ValueError(f"{field} must be a string")
+                user[field].encode("utf-8")
+    env = _env_section(data)
+    if not isinstance(env, dict):
+        raise ValueError("env must be an object")
+    for key, value in env.items():
+        key.encode("utf-8")
+        if not key or "=" in key or "\0" in key:
+            raise ValueError("env keys must be valid environment variable names")
+        if value is not None and (not isinstance(value, str) or "\0" in value):
+            raise ValueError("env values must be strings or null")
+        if value is not None:
+            value.encode("utf-8")
+    interval = data.get("auto_refresh_interval", 0)
+    if type(interval) is not int or interval not in (0, 5, 10, 30, 60):
+        raise ValueError("auto_refresh_interval must be a supported interval")
+    if type(data.get("dark_mode", False)) is not bool:
+        raise ValueError("dark_mode must be a boolean")
+    state = data.get("ui_state", {})
+    if not isinstance(state, dict):
+        raise ValueError("ui_state must be an object")
+    for field in ("sort_key", "reservation_sort_key"):
+        if field in state and not isinstance(state[field], str):
+            raise ValueError(f"ui_state.{field} must be a string")
+    for field in ("selected_user", "reservation_selected_user", "tier_filter"):
+        if state.get(field) is not None and not isinstance(state[field], str):
+            raise ValueError(f"ui_state.{field} must be a string or null")
+    if "interlibrary_only" in state and type(state["interlibrary_only"]) is not bool:
+        raise ValueError("ui_state.interlibrary_only must be a boolean")
+
 
 class KeychainAccessError(Exception):
     """The OS keychain denied or failed access to the master key."""
@@ -29,8 +97,8 @@ class ConfigReadError(Exception):
 
 class ConfigStore:
     def __init__(self, path: Path | None = None):
+        migrate_legacy = path is None
         if path is None:
-            self._migrate_legacy()
             path = Path.home() / CONFIG_DIRNAME / "config.json"
         self.path = path
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -44,6 +112,57 @@ class ConfigStore:
         # 마스터키 불일치(InvalidToken)로 복호화에 실패한 userId 목록.
         # 이 비밀번호들은 복구가 불가능하므로 UI가 재입력을 안내해야 한다.
         self.decrypt_failed_users: list[str] = []
+        if migrate_legacy:
+            try:
+                with self._transaction():
+                    self._migrate_legacy()
+            except ConfigReadError:
+                logger.warning("Legacy migration could not obtain the config lock")
+
+    @contextmanager
+    def _transaction(self):
+        # Lock a stable sidecar, never the config inode replaced by _write. Keep this
+        # file after unlocking: deleting it would let processes lock different inodes.
+        fd = None
+        locked = False
+        try:
+            try:
+                fd = os.open(self.path.with_name(self.path.name + ".lock"), os.O_RDWR | os.O_CREAT, 0o600)
+                deadline = time.monotonic() + _LOCK_TIMEOUT_SECONDS
+                while True:
+                    try:
+                        if os.name == "nt":
+                            import msvcrt
+                            os.lseek(fd, 0, os.SEEK_SET)
+                            msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+                        else:
+                            import fcntl
+                            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                        locked = True
+                        break
+                    except OSError as exc:
+                        if exc.errno not in (errno.EACCES, errno.EAGAIN, errno.EDEADLK):
+                            raise
+                        if time.monotonic() >= deadline:
+                            raise TimeoutError("config is busy in another app instance") from exc
+                        time.sleep(0.05)
+            except OSError as exc:
+                self.config_error = f"{self.path}: {exc}"
+                raise ConfigReadError(self.config_error) from exc
+            yield
+        finally:
+            if fd is not None:
+                try:
+                    if locked:
+                        if os.name == "nt":
+                            import msvcrt
+                            os.lseek(fd, 0, os.SEEK_SET)
+                            msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+                        else:
+                            import fcntl
+                            fcntl.flock(fd, fcntl.LOCK_UN)
+                finally:
+                    os.close(fd)
 
     def _migrate_legacy(self) -> None:
         """이전 이름(jenaonbot) 시절의 설정·마스터키를 새 위치로 옮긴다.
@@ -133,11 +252,7 @@ class ConfigStore:
     def _read(self) -> dict:
         try:
             data = json.loads(self.path.read_text(encoding="utf-8"))
-            if not isinstance(data, dict):
-                raise ValueError("config must be a JSON object")
-            users = data.get("users", [])
-            if not isinstance(users, list) or any(not isinstance(u, dict) for u in users):
-                raise ValueError("users must be a list of objects")
+            _validate_config(data)
             return data
         except FileNotFoundError:
             return {}
@@ -150,11 +265,13 @@ class ConfigStore:
         # Atomic replace: a crash mid-write must not truncate the config,
         # which holds the only copy of the encrypted passwords.
         payload = json.dumps(data, indent=2)
-        tmp_path = self.path.with_name(self.path.name + ".tmp")
-        fd = os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        fd, name = tempfile.mkstemp(prefix=self.path.name + ".", suffix=".tmp", dir=self.path.parent)
+        tmp_path = Path(name)
         try:
-            with os.fdopen(fd, "w") as fh:
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
                 fh.write(payload)
+                fh.flush()
+                os.fsync(fh.fileno())
             os.replace(tmp_path, self.path)
         except BaseException:
             tmp_path.unlink(missing_ok=True)
@@ -165,11 +282,15 @@ class ConfigStore:
         self.config_error = None
         self.decrypt_failed_users = []
         try:
-            data = self._read()
+            with self._transaction():
+                return self._load_locked()
         except ConfigReadError:
             # Keep the app usable, but never treat this fallback as a new setup.
             # All saves remain blocked until a successful explicit reload.
             return {"users": []}
+
+    def _load_locked(self) -> dict:
+        data = self._read()
         users = data.get("users", [])
 
         migrated = False
@@ -214,53 +335,54 @@ class ConfigStore:
     ) -> None:
         if self.config_error is not None:
             raise ConfigReadError(self.config_error)
-        existing = self._read()
-        existing_users = {
-            u.get("userId"): u
-            for u in existing.get("users", [])
-            if isinstance(u, dict)
-        }
+        with self._transaction():
+            existing = self._read()
+            existing_users = {
+                _account_id(u): u
+                for u in existing.get("users", [])
+                if isinstance(u, dict)
+            }
 
-        serialized_users = []
-        for user in users:
-            user_id = user.get("userId", "")
-            user_out = {"userId": user_id}
-            pw = user.get("password", "")
-            encrypted = None
-            if pw:
-                try:
-                    encrypted = self._encrypt(pw)
-                except KeychainAccessError:
-                    pass
-            if encrypted:
-                user_out["encrypted_password"] = encrypted
-            else:
-                # Can't encrypt (no plaintext in memory, or keychain access
-                # denied): keep whatever credential was already stored —
-                # ciphertext and/or a not-yet-migrated plaintext — instead of
-                # dropping it. New plaintext is never written to disk.
-                prev = existing_users.get(user_id, {})
-                if prev.get("encrypted_password"):
-                    user_out["encrypted_password"] = prev["encrypted_password"]
-                if prev.get("password"):
-                    user_out["password"] = prev["password"]
-            serialized_users.append(user_out)
+            serialized_users = []
+            for user in users:
+                user_id = _account_id(user)
+                user_out = {"userId": user_id}
+                pw = user.get("password", "")
+                encrypted = None
+                if pw:
+                    try:
+                        encrypted = self._encrypt(pw)
+                    except KeychainAccessError:
+                        pass
+                if encrypted:
+                    user_out["encrypted_password"] = encrypted
+                else:
+                    # Can't encrypt (no plaintext in memory, or keychain access
+                    # denied): keep whatever credential was already stored —
+                    # ciphertext and/or a not-yet-migrated plaintext — instead of
+                    # dropping it. New plaintext is never written to disk.
+                    prev = existing_users.get(user_id, {})
+                    if prev.get("encrypted_password"):
+                        user_out["encrypted_password"] = prev["encrypted_password"]
+                    if prev.get("password"):
+                        user_out["password"] = prev["password"]
+                serialized_users.append(user_out)
 
-        payload = {
-            "env": env,
-            "users": serialized_users,
-            "auto_refresh_interval": auto_refresh_interval,
-            "dark_mode": dark_mode,
-        }
-        if ui_state is not None:
-            payload["ui_state"] = ui_state
-        elif "ui_state" in existing:
-            payload["ui_state"] = existing["ui_state"]
-        self._write(payload)
+            payload = {
+                "env": env,
+                "users": serialized_users,
+                "auto_refresh_interval": auto_refresh_interval,
+                "dark_mode": dark_mode,
+            }
+            if ui_state is not None:
+                payload["ui_state"] = ui_state
+            elif "ui_state" in existing:
+                payload["ui_state"] = existing["ui_state"]
+            self._write(payload)
 
     def apply_env(self, data: dict | None = None) -> None:
         payload = data if data is not None else self._read()
-        env_section = payload.get("env", {k: v for k, v in payload.items() if k != "users"})
+        env_section = _env_section(payload)
         for key, value in env_section.items():
             if value is None:
                 continue

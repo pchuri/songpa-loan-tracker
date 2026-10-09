@@ -30,7 +30,7 @@ from qasync import asyncSlot
 
 from songpa_core.splib import get_infos_async
 from src.book_status import compute_book_status
-from src.config_store import ConfigReadError, ConfigStore
+from src.config_store import ConfigReadError, ConfigStore, _env_section
 from src.reservation_status import compute_reservation_status, group_key, is_ready_for_pickup
 from src.styles import DARK_STYLESHEET, LIGHT_STYLESHEET, build_font_rule
 from src.widgets import BookCard, FlowLayout, ReservationCard, SummaryBar, UserFilterBar
@@ -50,7 +50,7 @@ class MainWindow(QMainWindow):
         self.config_store = ConfigStore()
         self.config_data = self.config_store.load()
         self._config_warning_shown = False
-        self.env_data = self.config_data.get("env", {k: v for k, v in self.config_data.items() if k != "users"})
+        self.env_data = _env_section(self.config_data)
         self.users = self._normalize_users(self.config_data.get("users", []))
         self.config_store.apply_env(self.config_data)
         self.last_infos = None

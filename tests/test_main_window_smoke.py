@@ -426,3 +426,39 @@ def test_once_chips_exist_the_actual_selection_wins(window):
     window.reservation_user_filter.set_selection(None)
 
     assert window._current_ui_state()["reservation_selected_user"] is None
+
+
+@pytest.mark.parametrize("config", [
+    {"env": None, "users": []},
+    {"env": {}, "users": [], "ui_state": []},
+    {"env": {}, "users": [{"encrypted_password": "recoverable"}]},
+    {"env": {}, "users": [{"userId": "u", "encrypted_password": 123}]},
+])
+def test_malformed_fields_show_recovery_warning_without_losing_bytes(qapp, tmp_path, monkeypatch, config):
+    from PySide6.QtWidgets import QMessageBox
+    from src.main_window import MainWindow
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.setattr(keyring, "get_password", lambda *args: None)
+    monkeypatch.setattr(keyring, "set_password", lambda *args: None)
+    warnings = []
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args: warnings.append(args))
+    folder = tmp_path / ".songpa-loan-tracker"
+    folder.mkdir()
+    path = folder / "config.json"
+    original = json.dumps(config).encode()
+    path.write_bytes(original)
+    loop = asyncio.new_event_loop()
+    window = None
+    try:
+        window = MainWindow(loop)
+        qapp.processEvents()
+        assert window.config_store.config_error
+        assert len(warnings) == 1
+        window._save_ui_state()
+        assert path.read_bytes() == original
+        assert len(warnings) == 1
+    finally:
+        if window:
+            window.close()
+        loop.close()
