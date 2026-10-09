@@ -232,6 +232,33 @@ open dist/songpa-loan-tracker.app
    - `songpa-loan-tracker-macos` (macOS용)
    - `songpa-loan-tracker-windows` (Windows용)
 
+### Testing a pull-request macOS artifact
+
+The `songpa-loan-tracker-macos` Actions artifact contains an **inner**
+`songpa-loan-tracker-macos.zip`, its `.sha256` checksum, and
+`songpa-loan-tracker-macos-build.json` (version, checkout SHA, and build time).
+Extract the Actions download first, then extract the inner ZIP with macOS Archive
+Utility or `ditto -x -k songpa-loan-tracker-macos.zip <test-folder>`. Keep the whole
+`.app` together; do not copy individual framework files or replace framework links.
+
+CI verifies the app signature before packaging, preserves symlinks and modes with
+`ditto`, compares every extracted entry, file hash, mode, and symlink target with
+the original, then runs strict/deep `codesign` verification again. The inner ZIP
+is uploaded only after these checks. A PR artifact upload failure fails CI.
+To check a downloaded archive, run `shasum -a 256 -c songpa-loan-tracker-macos.zip.sha256`
+from the folder containing both files.
+
+These are ad-hoc-signed test builds, **not notarized Developer ID releases**.
+Signature integrity is not a Gatekeeper approval. Packaging does not change the
+signing identity or security policy; stop if macOS blocks the app and review the
+signing/distribution requirements. Do not disable Gatekeeper, strip quarantine,
+or re-sign the download to make a failed check pass.
+
+Use a separate macOS test user and dummy accounts for destructive config tests.
+The desktop app still uses `~/.songpa-loan-tracker/config.json` and the login
+keychain; changing `HOME` alone does not isolate the keychain. Do not alter your
+normal user's config or stored credentials.
+
 ## 배포
 
 ### ZIP 파일로 배포
