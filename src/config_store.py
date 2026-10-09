@@ -23,6 +23,10 @@ class KeychainAccessError(Exception):
     """The OS keychain denied or failed access to the master key."""
 
 
+class ConfigReadError(Exception):
+    """The existing config cannot be read safely and must not be replaced."""
+
+
 class ConfigStore:
     def __init__(self, path: Path | None = None):
         if path is None:
@@ -36,6 +40,7 @@ class ConfigStore:
             pass
         self._cipher: Fernet | None = None
         self.keychain_error: str | None = None
+        self.config_error: str | None = None
         # 마스터키 불일치(InvalidToken)로 복호화에 실패한 userId 목록.
         # 이 비밀번호들은 복구가 불가능하므로 UI가 재입력을 안내해야 한다.
         self.decrypt_failed_users: list[str] = []
@@ -76,7 +81,7 @@ class ConfigStore:
             return False
         try:
             data = json.loads(self.path.read_text())
-        except (OSError, json.JSONDecodeError):
+        except (OSError, UnicodeError, json.JSONDecodeError):
             # An unreadable or corrupt config may still hold ciphertext; stay
             # conservative so the master key is never regenerated over it.
             return True
@@ -126,12 +131,20 @@ class ConfigStore:
             return ""
 
     def _read(self) -> dict:
-        if not self.path.exists():
-            return {}
         try:
-            return json.loads(self.path.read_text())
-        except json.JSONDecodeError:
+            data = json.loads(self.path.read_text(encoding="utf-8"))
+            if not isinstance(data, dict):
+                raise ValueError("config must be a JSON object")
+            users = data.get("users", [])
+            if not isinstance(users, list) or any(not isinstance(u, dict) for u in users):
+                raise ValueError("users must be a list of objects")
+            return data
+        except FileNotFoundError:
             return {}
+        except (OSError, UnicodeError, ValueError) as exc:
+            self.config_error = f"{self.path}: {exc}"
+            logger.error("Config read failed; original file preserved: %s", self.config_error)
+            raise ConfigReadError(self.config_error) from exc
 
     def _write(self, data: dict) -> None:
         # Atomic replace: a crash mid-write must not truncate the config,
@@ -149,8 +162,14 @@ class ConfigStore:
 
     def load(self) -> dict:
         self.keychain_error = None
+        self.config_error = None
         self.decrypt_failed_users = []
-        data = self._read()
+        try:
+            data = self._read()
+        except ConfigReadError:
+            # Keep the app usable, but never treat this fallback as a new setup.
+            # All saves remain blocked until a successful explicit reload.
+            return {"users": []}
         users = data.get("users", [])
 
         migrated = False
@@ -193,6 +212,8 @@ class ConfigStore:
         dark_mode: bool = False,
         ui_state: dict | None = None,
     ) -> None:
+        if self.config_error is not None:
+            raise ConfigReadError(self.config_error)
         existing = self._read()
         existing_users = {
             u.get("userId"): u

@@ -1,11 +1,12 @@
 import json
+from pathlib import Path
 
 import keyring
 import keyring.errors
 import pytest
 from cryptography.fernet import Fernet
 
-from src.config_store import ConfigStore, KeychainAccessError
+from src.config_store import ConfigReadError, ConfigStore, KeychainAccessError
 
 
 def make_store(tmp_path, data=None):
@@ -212,12 +213,89 @@ def test_corrupt_config_blocks_key_regeneration(tmp_path, fake_keyring):
     # swallows denials) must not lead to generating a new master key over it.
     path = tmp_path / "config.json"
     path.write_text('{"users": [{"userId": "u1", "encrypted_password": "gAAA')
+    original = path.read_bytes()
     store = ConfigStore(path=path)
 
-    store.save({}, [{"userId": "u2", "password": "pw"}])
+    with pytest.raises(ConfigReadError):
+        store.save({}, [{"userId": "u2", "password": "pw"}])
 
     assert fake_keyring["set_calls"] == []
-    assert store.keychain_error
+    assert store.config_error
+    assert path.read_bytes() == original
+
+
+@pytest.mark.parametrize("original", [
+    b'{"users": [{"userId": "u1", "encrypted_password": "gAAA',
+    b"\xff\xfe",  # invalid UTF-8
+    b"[]",
+    b"null",
+    b'{"users": null}',
+    b'{"users": {"userId": "u1"}}',
+    b'{"users": ["u1"]}',
+])
+def test_invalid_config_load_and_saves_preserve_original(tmp_path, fake_keyring, original):
+    path = tmp_path / "config.json"
+    path.write_bytes(original)
+    store = ConfigStore(path=path)
+    # Even an available master key must not allow replacing the invalid file.
+    fake_keyring["store"][("songpa-loan-tracker", "__master__")] = Fernet.generate_key().decode()
+
+    data = store.load()
+
+    assert data == {"users": []}
+    assert store.config_error
+    assert path.read_bytes() == original
+    for users in (data["users"], [{"userId": "new", "password": "secret"}]):
+        with pytest.raises(ConfigReadError):
+            store.save({}, users, dark_mode=True, ui_state={"sort_key": "이름"})
+        assert path.read_bytes() == original
+    assert fake_keyring["set_calls"] == []
+    assert not path.with_name("config.json.tmp").exists()
+
+
+def test_unreadable_config_load_and_save_preserve_original(tmp_path, fake_keyring, monkeypatch):
+    store = make_store(tmp_path, make_encrypted_config(Fernet.generate_key(), "secret"))
+    original = store.path.read_bytes()
+
+    def fail_read(*args, **kwargs):
+        raise PermissionError("access denied")
+
+    monkeypatch.setattr(Path, "read_text", fail_read)
+    assert store.load() == {"users": []}
+    with pytest.raises(ConfigReadError):
+        store.save({}, [])
+    assert store.path.read_bytes() == original
+    assert fake_keyring["set_calls"] == []
+
+
+def test_config_corrupted_after_load_is_not_overwritten(tmp_path, fake_keyring):
+    store = make_store(tmp_path, {"users": []})
+    data = store.load()
+    original = b'{"users": ["recoverable data"'
+    store.path.write_bytes(original)
+
+    with pytest.raises(ConfigReadError):
+        store.save({}, data["users"])
+
+    assert store.path.read_bytes() == original
+
+
+def test_repaired_config_requires_reload_before_saving(tmp_path, fake_keyring):
+    store = make_store(tmp_path)
+    store.path.write_bytes(b'{"users":')
+    assert store.load() == {"users": []}
+    repaired = {"env": {}, "users": [{"userId": "restored"}], "dark_mode": True}
+    store.path.write_text(json.dumps(repaired))
+
+    # The empty fallback held by the old window must not erase restored users.
+    with pytest.raises(ConfigReadError):
+        store.save({}, [])
+    assert json.loads(store.path.read_text()) == repaired
+
+    data = store.load()
+    assert store.config_error is None
+    store.save({}, data["users"], dark_mode=True)
+    assert json.loads(store.path.read_text())["users"] == [{"userId": "restored"}]
 
 
 def test_write_is_atomic(tmp_path, fake_keyring, monkeypatch):
@@ -286,7 +364,7 @@ def test_keyring_denied_is_not_flagged_as_decrypt_failure(tmp_path, monkeypatch)
 
 def test_legacy_jenaonbot_config_is_migrated(tmp_path, monkeypatch, fake_keyring):
     """이전 이름(jenaonbot) 시절의 설정·마스터키가 새 위치로 옮겨진다."""
-    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
     legacy_dir = tmp_path / ".jenaonbot"
     legacy_dir.mkdir()
     config = {"env": {}, "users": [{"userId": "u1", "encrypted_password": "x"}]}
@@ -303,7 +381,7 @@ def test_legacy_jenaonbot_config_is_migrated(tmp_path, monkeypatch, fake_keyring
 
 def test_migration_does_not_overwrite_existing_config(tmp_path, monkeypatch, fake_keyring):
     """새 설정이 이미 있으면 레거시는 건드리지 않는다."""
-    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
     new_dir = tmp_path / ".songpa-loan-tracker"
     new_dir.mkdir()
     new_config = {"env": {}, "users": []}

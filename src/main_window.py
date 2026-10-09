@@ -30,7 +30,7 @@ from qasync import asyncSlot
 
 from songpa_core.splib import get_infos_async
 from src.book_status import compute_book_status
-from src.config_store import ConfigStore
+from src.config_store import ConfigReadError, ConfigStore
 from src.reservation_status import compute_reservation_status, group_key, is_ready_for_pickup
 from src.styles import DARK_STYLESHEET, LIGHT_STYLESHEET, build_font_rule
 from src.widgets import BookCard, FlowLayout, ReservationCard, SummaryBar, UserFilterBar
@@ -49,6 +49,7 @@ class MainWindow(QMainWindow):
         self.loop = loop
         self.config_store = ConfigStore()
         self.config_data = self.config_store.load()
+        self._config_warning_shown = False
         self.env_data = self.config_data.get("env", {k: v for k, v in self.config_data.items() if k != "users"})
         self.users = self._normalize_users(self.config_data.get("users", []))
         self.config_store.apply_env(self.config_data)
@@ -97,7 +98,9 @@ class MainWindow(QMainWindow):
         self._start_auto_refresh_timer()
         self._apply_theme()
 
-        if self.config_store.keychain_error:
+        if self.config_store.config_error:
+            QTimer.singleShot(0, self._show_config_warning)
+        elif self.config_store.keychain_error:
             QTimer.singleShot(0, self._show_keychain_warning)
         elif self.config_store.decrypt_failed_users:
             QTimer.singleShot(0, self._show_decrypt_failure_warning)
@@ -166,6 +169,19 @@ class MainWindow(QMainWindow):
         progress.close()
         updater.launch_updater(bat_path)
         QApplication.instance().quit()
+
+    def _show_config_warning(self):
+        self._config_warning_shown = True
+        QMessageBox.warning(
+            self,
+            "설정 파일 읽기 오류",
+            "설정 파일을 읽을 수 없어 설정 저장을 중단했습니다. "
+            "기존 파일은 그대로 보존되어 있습니다.\n\n"
+            "앱을 종료한 뒤 아래 파일을 백업하고 복구해 주세요. "
+            "처음부터 설정하려면 백업한 파일을 다른 이름으로 옮긴 뒤 "
+            "앱을 다시 실행하세요.\n\n"
+            f"파일: {self.config_store.path}",
+        )
 
     def _show_decrypt_failure_warning(self):
         names = ", ".join(self.config_store.decrypt_failed_users)
@@ -801,13 +817,17 @@ class MainWindow(QMainWindow):
 
     def _save_ui_state(self):
         ui_state = self._current_ui_state()
-        self.config_store.save(
-            self.env_data,
-            self.users,
-            self.auto_refresh_interval,
-            self.dark_mode,
-            ui_state=ui_state,
-        )
+        try:
+            self.config_store.save(
+                self.env_data,
+                self.users,
+                self.auto_refresh_interval,
+                self.dark_mode,
+                ui_state=ui_state,
+            )
+        except ConfigReadError:
+            if not self._config_warning_shown:
+                self._show_config_warning()
 
     def _show_book_detail_dialog(self, book: dict):
         dialog = QDialog(self)
@@ -835,19 +855,26 @@ class MainWindow(QMainWindow):
         dialog.exec()
 
     def save_settings(self):
-        self.env_data = {k: field.text().strip() for k, field in self.field_inputs.items() if field.text().strip()}
+        env_data = {k: field.text().strip() for k, field in self.field_inputs.items() if field.text().strip()}
         index_to_interval = {0: 0, 1: 5, 2: 10, 3: 30, 4: 60}
-        self.auto_refresh_interval = index_to_interval.get(self.auto_refresh_combo.currentIndex(), 0)
+        auto_refresh_interval = index_to_interval.get(self.auto_refresh_combo.currentIndex(), 0)
         old_dark_mode = self.dark_mode
-        self.dark_mode = self.dark_mode_checkbox.isChecked()
+        dark_mode = self.dark_mode_checkbox.isChecked()
         ui_state = self._current_ui_state()
-        self.config_store.save(
-            self.env_data,
-            self.users,
-            self.auto_refresh_interval,
-            self.dark_mode,
-            ui_state=ui_state,
-        )
+        try:
+            self.config_store.save(
+                env_data,
+                self.users,
+                auto_refresh_interval,
+                dark_mode,
+                ui_state=ui_state,
+            )
+        except ConfigReadError:
+            self._show_config_warning()
+            return
+        self.env_data = env_data
+        self.auto_refresh_interval = auto_refresh_interval
+        self.dark_mode = dark_mode
         self.config_store.apply_env({"env": self.env_data})
         self._start_auto_refresh_timer()
         self._apply_theme()

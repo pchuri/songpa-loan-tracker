@@ -21,6 +21,10 @@ jobs:
         run: uv python install
       - name: Install dependencies
         run: uv sync --locked
+      - name: Run tests
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: uv run --locked pytest
       - name: Generate version info
         shell: bash
         env:
@@ -64,6 +68,10 @@ jobs:
         run: uv python install
       - name: Install dependencies
         run: uv sync --locked
+      - name: Run tests
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: uv run --locked pytest
       - name: Generate version info
         shell: bash
         env:
