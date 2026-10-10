@@ -289,7 +289,10 @@ new run uses the existing `version.json` SHA to archive the current binaries und
 correct source metadata, then advances the old alias tag only if it is an ancestor.
 Missing legacy metadata, conflicting build/archive tags, annotated alias tags,
 immutable releases, tag rules or missing API digests fail closed and require review.
-Published archive releases accumulate separately from seven-day Actions artifacts;
+Release API `target_commitish` is set to `main` as a creation/authorization hint;
+all tags already exist at checked SHAs, so GitHub ignores that hint for source archives.
+This avoids requesting workflow-write permission when archiving older commits.
+Published archives and interrupted drafts accumulate separately from seven-day Actions artifacts;
 future cleanup needs an explicit retention decision. Signing/notarization is unchanged.
 
 To validate downloaded build inputs locally without any GitHub writes:

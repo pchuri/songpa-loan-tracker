@@ -187,9 +187,11 @@ def publish(api, directory, sha):
     candidate = api.release(tag)
     if candidate and not candidate["draft"]:
         raise PublicationError("Refusing to replace a published build release")
+    # Existing tag SHAs define the source. Keep the unused release creation
+    # hint on main so archiving does not require Workflows write permission.
     api.ensure_tag(tag, sha)
     if not candidate:
-        candidate = api.request("releases", "POST", {"tag_name": tag, "target_commitish": sha,
+        candidate = api.request("releases", "POST", {"tag_name": tag, "target_commitish": "main",
             "name": "Latest build", "body": f"Automated desktop build from {sha}.", "draft": True, "prerelease": True})
     api.upload(candidate, paths)
     candidate = api.request(f"releases/{candidate['id']}")
@@ -202,7 +204,7 @@ def publish(api, directory, sha):
             raise PublicationError("Archive release already exists; refusing to overwrite it")
         api.ensure_tag(archive, old_sha)
         api.request(f"releases/{current['id']}", "PATCH", {"tag_name": archive,
-            "target_commitish": old_sha, "name": "Archived build " + old_sha[:12]})
+            "target_commitish": "main", "name": "Archived build " + old_sha[:12]})
     # There is now a deliberate alias gap, never a visible mixed asset set.
     # On failure the archived release and staged draft survive; rerun to finish.
     if api.head() != sha:
@@ -214,7 +216,7 @@ def publish(api, directory, sha):
     if api.head() != sha:
         raise PublicationError("Main advanced during alias switch; archive and draft preserved")
     api.request(f"releases/{candidate['id']}", "PATCH", {"tag_name": ALIAS,
-        "target_commitish": sha, "draft": False, "prerelease": True})
+        "target_commitish": "main", "draft": False, "prerelease": True})
     live = api.release(ALIAS)
     if not live or live["id"] != candidate["id"] or live["draft"] or api.ref(ALIAS)["object"]["sha"] != sha:
         raise PublicationError("Published alias verification failed")

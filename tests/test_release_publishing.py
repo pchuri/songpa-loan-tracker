@@ -318,3 +318,13 @@ def test_corrupted_published_manifest_is_not_silently_replaced(inputs):
     with pytest.raises(PublicationError, match='integrity'):
         publish(api, inputs, NEW)
     assert api.calls == []
+
+
+def test_release_creation_hints_do_not_require_historical_workflow_permissions(inputs):
+    api = FakeGitHub()
+    publish(api, inputs, NEW)
+    release_writes = [c for c in api.calls if c[0] in ('POST', 'PATCH') and c[1].startswith('releases')]
+    assert len(release_writes) == 3
+    assert all(c[2]['target_commitish'] == 'main' for c in release_writes)
+    assert api.refs['latest-build'] == NEW
+    assert api.refs['archive-' + OLD + '-1'] == OLD
