@@ -92,7 +92,7 @@ class KeychainAccessError(Exception):
 
 
 class ConfigReadError(Exception):
-    """The existing config cannot be read safely and must not be replaced."""
+    """Config I/O failed; further saves require an explicit successful reload."""
 
 
 class ConfigStore:
@@ -265,16 +265,26 @@ class ConfigStore:
         # Atomic replace: a crash mid-write must not truncate the config,
         # which holds the only copy of the encrypted passwords.
         payload = json.dumps(data, indent=2)
-        fd, name = tempfile.mkstemp(prefix=self.path.name + ".", suffix=".tmp", dir=self.path.parent)
-        tmp_path = Path(name)
+        tmp_path = None
         try:
+            fd, name = tempfile.mkstemp(prefix=self.path.name + ".", suffix=".tmp", dir=self.path.parent)
+            tmp_path = Path(name)
             with os.fdopen(fd, "w", encoding="utf-8") as fh:
                 fh.write(payload)
                 fh.flush()
                 os.fsync(fh.fileno())
             os.replace(tmp_path, self.path)
-        except BaseException:
-            tmp_path.unlink(missing_ok=True)
+        except BaseException as exc:
+            if tmp_path is not None:
+                try:
+                    tmp_path.unlink(missing_ok=True)
+                except OSError:
+                    # A leftover unique temp file cannot affect the config or
+                    # the next writer. Report the original storage failure.
+                    logger.warning("Could not remove uncommitted config temporary file")
+            if isinstance(exc, OSError):
+                self.config_error = f"{self.path}: {exc}"
+                raise ConfigReadError(self.config_error) from exc
             raise
 
     def load(self) -> dict:

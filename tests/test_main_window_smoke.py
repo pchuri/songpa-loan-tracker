@@ -105,7 +105,7 @@ def test_corrupt_config_survives_startup_autosave_and_settings(
         window.sort_combo.setCurrentText("이름")
         window._save_ui_state()
         assert len(warnings) == 1  # Repeated autosaves do not spam warnings.
-        assert "설정 파일 읽기 오류" in warnings[0]
+        assert "설정 파일 오류" in warnings[0]
         assert str(path) in warnings[0][2]
         assert path.read_bytes() == original
 
@@ -144,6 +144,8 @@ def _reservation(reservation_id, title, library, rank, waiting, expiry_date=""):
 @pytest.fixture
 def window(qapp, tmp_path, monkeypatch):
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.setattr(keyring, "get_password", lambda *args: None)
+    monkeypatch.setattr(keyring, "set_password", lambda *args: None)
     config_dir = tmp_path / ".songpa-loan-tracker"
     config_dir.mkdir()
     (config_dir / "config.json").write_text(json.dumps({"env": {}, "users": []}))
@@ -178,6 +180,47 @@ def test_valid_settings_save_still_applies_and_reports_success(window, monkeypat
     assert window.auto_refresh_interval == 5
     assert len(successes) == 1
     assert warnings == []
+
+
+@pytest.mark.parametrize("failure_point", ["mkstemp", "fsync", "replace"])
+def test_write_failure_blocks_ui_changes_and_recovers_after_reload(window, monkeypatch, failure_point):
+    from PySide6.QtWidgets import QMessageBox
+    from src import config_store
+
+    path = window.config_store.path
+    original = path.read_bytes()
+    warnings, successes = [], []
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args: warnings.append(args))
+    monkeypatch.setattr(QMessageBox, "information", lambda *args: successes.append(args))
+
+    def fail(*args, **kwargs):
+        raise OSError("simulated storage failure")
+
+    with monkeypatch.context() as patch:
+        target = config_store.tempfile if failure_point == "mkstemp" else config_store.os
+        patch.setattr(target, failure_point, fail)
+        for _ in range(3):
+            window._save_ui_state()
+        assert len(warnings) == 1
+        window.dark_mode_checkbox.setChecked(True)
+        window.auto_refresh_combo.setCurrentIndex(1)
+        window.save_settings()
+        assert len(warnings) == 2
+        assert successes == []
+        assert window.dark_mode is False
+        assert window.auto_refresh_interval == 0
+        assert window.auto_refresh_timer is None
+        assert path.read_bytes() == original
+        assert list(path.parent.glob("*.tmp")) == []
+    # Restoring the storage backend alone cannot save stale fallback state.
+    window.save_settings()
+    assert successes == []
+    assert path.read_bytes() == original
+    window.config_store.load()
+    window.save_settings()
+    assert len(successes) == 1
+    assert window.dark_mode is True
+    assert window.auto_refresh_interval == 5
 
 
 def test_reservation_tab_renders_a_card_per_reservation(window):

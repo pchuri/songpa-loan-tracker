@@ -310,14 +310,64 @@ def test_write_is_atomic(tmp_path, fake_keyring, monkeypatch):
         raise OSError("simulated crash")
 
     monkeypatch.setattr("src.config_store.os.replace", fail_replace)
-    with pytest.raises(OSError):
+    with pytest.raises(ConfigReadError):
         store.save({"A": "1"}, [])
     assert store.path.read_text() == original
 
     monkeypatch.setattr("src.config_store.os.replace", real_replace)
+    store.load()
     store.save({"A": "1"}, [])
     assert json.loads(store.path.read_text())["env"] == {"A": "1"}
     assert list(tmp_path.glob("*.tmp")) == []
+
+
+@pytest.mark.parametrize("failure_point", ["mkstemp", "fsync", "replace"])
+def test_migration_write_failure_preserves_original_and_recovers(tmp_path, fake_keyring, monkeypatch, failure_point):
+    from src import config_store
+
+    store = make_store(tmp_path, {"env": {}, "users": [{"userId": "dummy", "password": "dummy-password"}]})
+    original = store.path.read_bytes()
+
+    def fail(*args, **kwargs):
+        raise OSError("simulated storage failure")
+
+    with monkeypatch.context() as patch:
+        target = config_store.tempfile if failure_point == "mkstemp" else config_store.os
+        patch.setattr(target, failure_point, fail)
+        assert store.load() == {"users": []}
+        assert store.config_error
+        with pytest.raises(ConfigReadError):
+            store.save({}, [])
+        assert store.path.read_bytes() == original
+        assert list(tmp_path.glob("*.tmp")) == []
+    with pytest.raises(ConfigReadError):
+        store.save({}, [])
+    assert store.load()["users"][0]["password"] == "dummy-password"
+    assert store.config_error is None
+    stored = json.loads(store.path.read_text())["users"][0]
+    assert stored["encrypted_password"]
+    assert "password" not in stored
+
+
+def test_failed_temp_cleanup_does_not_hide_write_failure(tmp_path, fake_keyring, monkeypatch):
+    store = make_store(tmp_path, {"env": {}, "users": []})
+    original = store.path.read_bytes()
+
+    def fail_sync(*args):
+        raise OSError("simulated fsync failure")
+
+    def fail_unlink(*args, **kwargs):
+        raise PermissionError("simulated cleanup denial")
+
+    with monkeypatch.context() as patch:
+        patch.setattr("src.config_store.os.fsync", fail_sync)
+        patch.setattr(Path, "unlink", fail_unlink)
+        with pytest.raises(ConfigReadError, match="simulated fsync failure"):
+            store.save({}, [])
+    assert store.path.read_bytes() == original
+    assert store.config_error
+    store.load()
+    store.save({}, [])
 
 
 def test_cipher_failure_is_cached_to_avoid_prompt_spam(tmp_path, monkeypatch):
