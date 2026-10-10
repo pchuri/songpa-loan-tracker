@@ -98,4 +98,4 @@ def test_workflow_packages_and_verifies_before_upload():
     assert "verify_macos_bundle.py" in macos
     assert macos.count("codesign --verify --deep --strict") == 2
     assert "if-no-files-found: error" in macos
-    assert "continue-on-error: ${{ github.event_name != 'pull_request' }}" in macos
+    assert "continue-on-error:" not in macos

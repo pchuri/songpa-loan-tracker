@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 # PySide6 6.10.1 has no Python 3.15 wheel. Keep desktop builds on the
 # tested interpreter even when uv's default Python advances.
@@ -63,10 +63,9 @@ jobs:
           cp version.json dist/songpa-loan-tracker-macos-build.json
       # Upload the verified ZIP, never the raw .app: artifact storage otherwise
       # flattens framework symlinks and loses executable permission bits.
-      # PRs have no release fallback, so artifact upload must succeed there.
+      # Both uploads are required before the coordinator can publish either platform.
       - name: Upload artifact
         uses: actions/upload-artifact@v4
-        continue-on-error: ${{ github.event_name != 'pull_request' }}
         with:
           name: songpa-loan-tracker-macos
           retention-days: 7
@@ -76,13 +75,6 @@ jobs:
             dist/songpa-loan-tracker-macos-build.json
           if-no-files-found: error
           compression-level: 0
-      - name: Upload to latest-build release
-        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh release create latest-build --prerelease --title "Latest build" --notes "Automated build" || true
-          gh release upload latest-build dist/songpa-loan-tracker-macos.zip --clobber
 
   build-windows:
     runs-on: windows-latest
@@ -113,18 +105,53 @@ jobs:
           fi
       - name: Build (PyInstaller)
         run: uv run pyinstaller --windowed --onefile --name songpa-loan-tracker --icon resources/songpa-loan-tracker.ico src/main_app.py
+      - name: Prepare Windows release metadata
+        shell: bash
+        run: cp version.json dist/version.json
       - name: Upload artifact
         uses: actions/upload-artifact@v4
-        continue-on-error: true
         with:
           name: songpa-loan-tracker-windows
           retention-days: 7
-          path: dist/songpa-loan-tracker.exe
-      - name: Upload to latest-build release
-        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+          path: |
+            dist/songpa-loan-tracker.exe
+            dist/version.json
+          if-no-files-found: error
+
+  verify-release:
+    needs: [build-macos, build-windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: songpa-loan-tracker-*
+          path: release-input
+          merge-multiple: true
+      - name: Verify complete release inputs without publishing
+        run: python3 scripts/publish_release.py release-input --sha "$GITHUB_SHA"
+
+  publish-release:
+    needs: [verify-release]
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    concurrency:
+      group: songpa-latest-build-publication
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: songpa-loan-tracker-*
+          path: release-input
+          merge-multiple: true
+      - name: Publish a complete coherent release
         env:
           GH_TOKEN: ${{ github.token }}
-        shell: bash
-        run: |
-          gh release create latest-build --prerelease --title "Latest build" --notes "Automated build" || true
-          gh release upload latest-build dist/songpa-loan-tracker.exe version.json --clobber
+        run: python3 scripts/publish_release.py release-input --sha "$GITHUB_SHA" --publish
