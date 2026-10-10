@@ -10,6 +10,11 @@ on:
 permissions:
   contents: write
 
+# PySide6 6.10.1 has no Python 3.15 wheel. Keep desktop builds on the
+# tested interpreter even when uv's default Python advances.
+env:
+  UV_PYTHON: "3.12"
+
 jobs:
   build-macos:
     runs-on: macos-latest
@@ -18,9 +23,13 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v4
       - name: Set up Python
-        run: uv python install
+        run: uv python install 3.12
       - name: Install dependencies
         run: uv sync --locked
+      - name: Run tests
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: uv run --locked pytest
       - name: Generate version info
         shell: bash
         env:
@@ -36,16 +45,37 @@ jobs:
           fi
       - name: Build (PyInstaller)
         run: uv run pyinstaller songpa-loan-tracker.spec
-      # Artifact storage quota can block uploads for hours; the release
-      # asset below is the reliable delivery path.
+      - name: Package and verify app bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP="dist/songpa-loan-tracker.app"
+          ARCHIVE="dist/songpa-loan-tracker-macos.zip"
+          codesign --verify --deep --strict --verbose=2 "$APP"
+          ditto -c -k --sequesterRsrc --keepParent "$APP" "$ARCHIVE"
+          VERIFY_DIR="$(mktemp -d)"
+          trap 'rm -rf "$VERIFY_DIR"' EXIT
+          ditto -x -k "$ARCHIVE" "$VERIFY_DIR"
+          uv run --locked python scripts/verify_macos_bundle.py "$APP" "$VERIFY_DIR/songpa-loan-tracker.app"
+          codesign --verify --deep --strict --verbose=2 "$VERIFY_DIR/songpa-loan-tracker.app"
+          codesign --display --verbose=4 "$VERIFY_DIR/songpa-loan-tracker.app"
+          (cd dist && shasum -a 256 songpa-loan-tracker-macos.zip > songpa-loan-tracker-macos.zip.sha256)
+          cp version.json dist/songpa-loan-tracker-macos-build.json
+      # Upload the verified ZIP, never the raw .app: artifact storage otherwise
+      # flattens framework symlinks and loses executable permission bits.
+      # PRs have no release fallback, so artifact upload must succeed there.
       - name: Upload artifact
         uses: actions/upload-artifact@v4
-        continue-on-error: true
+        continue-on-error: ${{ github.event_name != 'pull_request' }}
         with:
           name: songpa-loan-tracker-macos
-          path: dist/songpa-loan-tracker.app
-      - name: Package app bundle
-        run: ditto -c -k --keepParent dist/songpa-loan-tracker.app dist/songpa-loan-tracker-macos.zip
+          retention-days: 7
+          path: |
+            dist/songpa-loan-tracker-macos.zip
+            dist/songpa-loan-tracker-macos.zip.sha256
+            dist/songpa-loan-tracker-macos-build.json
+          if-no-files-found: error
+          compression-level: 0
       - name: Upload to latest-build release
         if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
         env:
@@ -61,9 +91,13 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v4
       - name: Set up Python
-        run: uv python install
+        run: uv python install 3.12
       - name: Install dependencies
         run: uv sync --locked
+      - name: Run tests
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: uv run --locked pytest
       - name: Generate version info
         shell: bash
         env:
@@ -84,6 +118,7 @@ jobs:
         continue-on-error: true
         with:
           name: songpa-loan-tracker-windows
+          retention-days: 7
           path: dist/songpa-loan-tracker.exe
       - name: Upload to latest-build release
         if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'

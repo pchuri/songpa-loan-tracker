@@ -1,6 +1,7 @@
 import asyncio
 import json
 import os
+from pathlib import Path
 
 import keyring
 import keyring.errors
@@ -23,7 +24,7 @@ def test_main_window_constructs_when_keyring_fails(qapp, tmp_path, monkeypatch):
 
     monkeypatch.setattr(keyring, "get_password", raise_error)
     monkeypatch.setattr(keyring, "set_password", raise_error)
-    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
 
     config_dir = tmp_path / ".songpa-loan-tracker"
     config_dir.mkdir()
@@ -68,6 +69,63 @@ def test_main_window_constructs_when_keyring_fails(qapp, tmp_path, monkeypatch):
         loop.close()
 
 
+@pytest.mark.parametrize("corrupt_at_startup", [True, False])
+def test_corrupt_config_survives_startup_autosave_and_settings(
+    qapp, tmp_path, monkeypatch, corrupt_at_startup
+):
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.setattr(keyring, "get_password", lambda *args: None)
+    key_writes = []
+    monkeypatch.setattr(keyring, "set_password", lambda *args: key_writes.append(args))
+    config_dir = tmp_path / ".songpa-loan-tracker"
+    config_dir.mkdir()
+    path = config_dir / "config.json"
+    original = b'{"users": [{"userId": "u1", "encrypted_password": "gAAA'
+    path.write_bytes(original if corrupt_at_startup else b'{"env": {}, "users": []}')
+
+    from PySide6.QtWidgets import QMessageBox
+    from src.main_window import MainWindow
+
+    warnings, successes = [], []
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args: warnings.append(args))
+    monkeypatch.setattr(QMessageBox, "information", lambda *args: successes.append(args))
+    loop = asyncio.new_event_loop()
+    window = None
+    try:
+        window = MainWindow(loop)
+        for _ in range(5):
+            qapp.processEvents()
+        if corrupt_at_startup:
+            assert len(warnings) == 1
+            assert path.read_bytes() == original
+        else:
+            assert warnings == []
+            path.write_bytes(original)
+
+        window.sort_combo.setCurrentText("이름")
+        window._save_ui_state()
+        assert len(warnings) == 1  # Repeated autosaves do not spam warnings.
+        assert "설정 파일 오류" in warnings[0]
+        assert str(path) in warnings[0][2]
+        assert path.read_bytes() == original
+
+        window.users = [{"userId": "new", "password": "secret"}]
+        window.dark_mode_checkbox.setChecked(True)
+        window.auto_refresh_combo.setCurrentIndex(1)
+        window.save_settings()
+        assert len(warnings) == 2  # An explicit save explains why it failed.
+        assert successes == []
+        assert window.dark_mode is False
+        assert window.auto_refresh_interval == 0
+        assert window.auto_refresh_timer is None
+        assert path.read_bytes() == original
+        assert key_writes == []
+    finally:
+        if window is not None:
+            window.close()
+        loop.close()
+
+
 def _reservation(reservation_id, title, library, rank, waiting, expiry_date=""):
     return {
         "reservation_id": reservation_id,
@@ -85,7 +143,9 @@ def _reservation(reservation_id, title, library, rank, waiting, expiry_date=""):
 
 @pytest.fixture
 def window(qapp, tmp_path, monkeypatch):
-    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.setattr(keyring, "get_password", lambda *args: None)
+    monkeypatch.setattr(keyring, "set_password", lambda *args: None)
     config_dir = tmp_path / ".songpa-loan-tracker"
     config_dir.mkdir()
     (config_dir / "config.json").write_text(json.dumps({"env": {}, "users": []}))
@@ -99,6 +159,68 @@ def window(qapp, tmp_path, monkeypatch):
     finally:
         win.close()
         loop.close()
+
+
+def test_valid_settings_save_still_applies_and_reports_success(window, monkeypatch):
+    from PySide6.QtWidgets import QMessageBox
+
+    successes, warnings = [], []
+    monkeypatch.setattr(QMessageBox, "information", lambda *args: successes.append(args))
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args: warnings.append(args))
+    window.dark_mode_checkbox.setChecked(True)
+    window.auto_refresh_combo.setCurrentIndex(1)
+
+    window.save_settings()
+
+    saved = json.loads(window.config_store.path.read_text())
+    assert saved["dark_mode"] is True
+    assert saved["auto_refresh_interval"] == 5
+    assert saved["ui_state"] == window._current_ui_state()
+    assert window.dark_mode is True
+    assert window.auto_refresh_interval == 5
+    assert len(successes) == 1
+    assert warnings == []
+
+
+@pytest.mark.parametrize("failure_point", ["mkstemp", "fsync", "replace"])
+def test_write_failure_blocks_ui_changes_and_recovers_after_reload(window, monkeypatch, failure_point):
+    from PySide6.QtWidgets import QMessageBox
+    from src import config_store
+
+    path = window.config_store.path
+    original = path.read_bytes()
+    warnings, successes = [], []
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args: warnings.append(args))
+    monkeypatch.setattr(QMessageBox, "information", lambda *args: successes.append(args))
+
+    def fail(*args, **kwargs):
+        raise OSError("simulated storage failure")
+
+    with monkeypatch.context() as patch:
+        target = config_store.tempfile if failure_point == "mkstemp" else config_store.os
+        patch.setattr(target, failure_point, fail)
+        for _ in range(3):
+            window._save_ui_state()
+        assert len(warnings) == 1
+        window.dark_mode_checkbox.setChecked(True)
+        window.auto_refresh_combo.setCurrentIndex(1)
+        window.save_settings()
+        assert len(warnings) == 2
+        assert successes == []
+        assert window.dark_mode is False
+        assert window.auto_refresh_interval == 0
+        assert window.auto_refresh_timer is None
+        assert path.read_bytes() == original
+        assert list(path.parent.glob("*.tmp")) == []
+    # Restoring the storage backend alone cannot save stale fallback state.
+    window.save_settings()
+    assert successes == []
+    assert path.read_bytes() == original
+    window.config_store.load()
+    window.save_settings()
+    assert len(successes) == 1
+    assert window.dark_mode is True
+    assert window.auto_refresh_interval == 5
 
 
 def test_reservation_tab_renders_a_card_per_reservation(window):
@@ -347,3 +469,39 @@ def test_once_chips_exist_the_actual_selection_wins(window):
     window.reservation_user_filter.set_selection(None)
 
     assert window._current_ui_state()["reservation_selected_user"] is None
+
+
+@pytest.mark.parametrize("config", [
+    {"env": None, "users": []},
+    {"env": {}, "users": [], "ui_state": []},
+    {"env": {}, "users": [{"encrypted_password": "recoverable"}]},
+    {"env": {}, "users": [{"userId": "u", "encrypted_password": 123}]},
+])
+def test_malformed_fields_show_recovery_warning_without_losing_bytes(qapp, tmp_path, monkeypatch, config):
+    from PySide6.QtWidgets import QMessageBox
+    from src.main_window import MainWindow
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.setattr(keyring, "get_password", lambda *args: None)
+    monkeypatch.setattr(keyring, "set_password", lambda *args: None)
+    warnings = []
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args: warnings.append(args))
+    folder = tmp_path / ".songpa-loan-tracker"
+    folder.mkdir()
+    path = folder / "config.json"
+    original = json.dumps(config).encode()
+    path.write_bytes(original)
+    loop = asyncio.new_event_loop()
+    window = None
+    try:
+        window = MainWindow(loop)
+        qapp.processEvents()
+        assert window.config_store.config_error
+        assert len(warnings) == 1
+        window._save_ui_state()
+        assert path.read_bytes() == original
+        assert len(warnings) == 1
+    finally:
+        if window:
+            window.close()
+        loop.close()

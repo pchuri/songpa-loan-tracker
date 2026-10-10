@@ -84,6 +84,12 @@
    - 다크모드 활성화
 
 설정은 `~/.songpa-loan-tracker/config.json`에 자동 저장됩니다.
+파일이 손상되거나 읽을 수 없으면 원본을 보호하기 위해 자동 저장과 "저장 및 적용"이
+중단되고 안내가 표시됩니다. 앱을 종료한 뒤 안내된 파일을 백업하고 복구하세요.
+처음부터 설정하려면 백업한 파일을 다른 이름으로 옮긴 뒤 앱을 다시 실행하세요.
+계정 ID·비밀번호·화면 설정의 잘못된 형식도 저장 전에 검사합니다. 여러 앱 인스턴스의
+저장은 잠금으로 순서를 보장하고 각자 임시 파일을 사용합니다. 다른 인스턴스가 설정을
+사용 중이라 잠금을 얻지 못한 경우에도 저장을 중단하므로, 다른 앱을 종료한 뒤 다시 실행하세요.
 
 ## 안드로이드 앱 (반납요정)
 
@@ -225,6 +231,33 @@ open dist/songpa-loan-tracker.app
 4. 완료 후 **Artifacts**에서 다운로드
    - `songpa-loan-tracker-macos` (macOS용)
    - `songpa-loan-tracker-windows` (Windows용)
+
+### Testing a pull-request macOS artifact
+
+The `songpa-loan-tracker-macos` Actions artifact contains an **inner**
+`songpa-loan-tracker-macos.zip`, its `.sha256` checksum, and
+`songpa-loan-tracker-macos-build.json` (version, checkout SHA, and build time).
+Extract the Actions download first, then extract the inner ZIP with macOS Archive
+Utility or `ditto -x -k songpa-loan-tracker-macos.zip <test-folder>`. Keep the whole
+`.app` together; do not copy individual framework files or replace framework links.
+
+CI verifies the app signature before packaging, preserves symlinks and modes with
+`ditto`, compares every extracted entry, file hash, mode, and symlink target with
+the original, then runs strict/deep `codesign` verification again. The inner ZIP
+is uploaded only after these checks. A PR artifact upload failure fails CI.
+To check a downloaded archive, run `shasum -a 256 -c songpa-loan-tracker-macos.zip.sha256`
+from the folder containing both files.
+
+These are ad-hoc-signed test builds, **not notarized Developer ID releases**.
+Signature integrity is not a Gatekeeper approval. Packaging does not change the
+signing identity or security policy; stop if macOS blocks the app and review the
+signing/distribution requirements. Do not disable Gatekeeper, strip quarantine,
+or re-sign the download to make a failed check pass.
+
+Use a separate macOS test user and dummy accounts for destructive config tests.
+The desktop app still uses `~/.songpa-loan-tracker/config.json` and the login
+keychain; changing `HOME` alone does not isolate the keychain. Do not alter your
+normal user's config or stored credentials.
 
 ## 배포
 
