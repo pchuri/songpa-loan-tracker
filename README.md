@@ -259,6 +259,48 @@ The desktop app still uses `~/.songpa-loan-tracker/config.json` and the login
 keychain; changing `HOME` alone does not isolate the keychain. Do not alter your
 normal user's config or stored credentials.
 
+### Coherent `latest-build` publication
+
+Both desktop builds run their tests and upload required artifacts with a seven-day
+retention period. A read-only job checks that the macOS ZIP checksum and both build
+metadata files agree with the workflow commit/version. PRs stop there; they never
+create tags or releases. Only the serialized main publication job has content-write
+permission. It stages all six release assets (including a SHA-256 manifest) in a draft
+and verifies GitHub's uploaded digests before touching the live release.
+
+The publisher skips runs that no longer match `main`, rejects older/divergent
+commits, and never force-updates a tag. Before advancing `latest-build`, it archives
+the previous release under `archive-<actual-build-sha>-<release-id>`, preserving its
+files and API asset IDs. It then advances the lightweight alias tag and publishes
+the complete draft at `latest-build`. Source archives and binary metadata therefore
+refer to the same commit. The existing Windows updater URL and asset names remain
+compatible. Already-published matching commits are not rebuilt over live assets.
+
+GitHub cannot atomically change a tag and a release. The alias can briefly return
+404 between archiving and publishing. A failure during that switch leaves the old
+release available at its archive tag and the candidate unpublished; it never exposes
+a partially uploaded or mixed release. Rerun the workflow on the current `main`
+commit to finish the switch. Do not delete the archive/draft or force-reset tags to
+recover. An older run cannot restore a stale alias over a newer build.
+
+**First application:** before merging this workflow, let all legacy main publication
+runs finish; those older workflows do not share the new publication lock. The first
+new run uses the existing `version.json` SHA to archive the current binaries under
+correct source metadata, then advances the old alias tag only if it is an ancestor.
+Missing legacy metadata, conflicting build/archive tags, annotated alias tags,
+immutable releases, tag rules or missing API digests fail closed and require review.
+Release API `target_commitish` is set to `main` as a creation/authorization hint;
+all tags already exist at checked SHAs, so GitHub ignores that hint for source archives.
+This avoids requesting workflow-write permission when archiving older commits.
+Published archives and interrupted drafts accumulate separately from seven-day Actions artifacts;
+future cleanup needs an explicit retention decision. Signing/notarization is unchanged.
+
+To validate downloaded build inputs locally without any GitHub writes:
+
+```bash
+python scripts/publish_release.py <artifact-folder> --sha <full-workflow-sha>
+```
+
 ## 배포
 
 ### ZIP 파일로 배포
