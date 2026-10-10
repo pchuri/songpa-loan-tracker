@@ -10,6 +10,11 @@ on:
 permissions:
   contents: write
 
+# PySide6 6.10.1 has no Python 3.15 wheel. Keep desktop builds on the
+# tested interpreter even when uv's default Python advances.
+env:
+  UV_PYTHON: "3.12"
+
 jobs:
   build-macos:
     runs-on: macos-latest
@@ -18,7 +23,7 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v4
       - name: Set up Python
-        run: uv python install
+        run: uv python install 3.12
       - name: Install dependencies
         run: uv sync --locked
       - name: Run tests
@@ -86,7 +91,7 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v4
       - name: Set up Python
-        run: uv python install
+        run: uv python install 3.12
       - name: Install dependencies
         run: uv sync --locked
       - name: Run tests
