@@ -94,7 +94,7 @@ PAGING_THREE = (
 )
 
 
-def _reservation_row(title):
+def _reservation_row(title, reservation_id):
     return f"""
     <div class="myArticle-list">
       <div class="infoBox">
@@ -104,32 +104,78 @@ def _reservation_row(title):
         <div class="info"><span>도서현황 : 대출중</span><span>반납예정일 :</span></div>
       </div>
       <div class="statusBox"><a class="status cncl" href="#btn"
-         onclick="javascript:fnLoanReservationCancelProc(9); return false;">예약취소</a></div>
+         onclick="javascript:fnLoanReservationCancelProc({reservation_id}); return false;">예약취소</a></div>
     </div>"""
 
 
-def test_reservation_pages_beyond_the_first_are_fetched_and_no_further(monkeypatch):
-    """페이지 목록이 알린 만큼만 가져온다."""
-    pages = dict(PAGES)
-    pages[RESERVATION_URL] = _reservation_row("1페이지 책") + PAGING_THREE
-    pages[f"{RESERVATION_URL}?currentPageNo=2"] = _reservation_row("2페이지 책") + PAGING_THREE
-    pages[f"{RESERVATION_URL}?currentPageNo=3"] = _reservation_row("3페이지 책") + PAGING_THREE
-    requested = []
-
+def _run_with_pages(monkeypatch, pages, requested=None):
     async def fake_login(user_id, password, timeout=10):
         return "SESSION=stub"
 
     async def fake_fetch(url, session, max_retries=5, timeout=10):
-        requested.append(url)
+        if requested is not None:
+            requested.append(url)
         return pages[url]
 
     monkeypatch.setattr(splib, "login", fake_login)
     monkeypatch.setattr(splib, "fetch", fake_fetch)
+    return asyncio.run(splib._fetch_user_info("user", "pw"))
 
-    info = asyncio.run(splib._fetch_user_info("user", "pw"))
+
+def test_reservation_pages_beyond_the_first_are_fetched_and_no_further(monkeypatch):
+    """페이지 목록이 알린 만큼만 가져온다. 쪽마다 서로 다른 예약 ID."""
+    pages = dict(PAGES)
+    pages[RESERVATION_URL] = _reservation_row("1페이지 책", 101) + PAGING_THREE
+    pages[f"{RESERVATION_URL}?currentPageNo=2"] = _reservation_row("2페이지 책", 102) + PAGING_THREE
+    pages[f"{RESERVATION_URL}?currentPageNo=3"] = _reservation_row("3페이지 책", 103) + PAGING_THREE
+    requested = []
+
+    info = _run_with_pages(monkeypatch, pages, requested)
 
     assert [r["title"] for r in info["reservations"]] == ["1페이지 책", "2페이지 책", "3페이지 책"]
+    assert [r["reservation_id"] for r in info["reservations"]] == ["101", "102", "103"]
+    assert f"{RESERVATION_URL}?currentPageNo=2" in requested
+    assert f"{RESERVATION_URL}?currentPageNo=3" in requested
     assert f"{RESERVATION_URL}?currentPageNo=4" not in requested
+    assert "partial" not in info
+
+
+def test_next_page_repeating_a_reservation_id_with_a_different_title_is_incomplete(monkeypatch):
+    """2쪽이 1쪽과 같은 예약 ID를 다른 제목으로 내놓으면 모순이다. 합치지 않고 불완전으로 알린다."""
+    pages = dict(PAGES)
+    pages[RESERVATION_URL] = _reservation_row("1페이지 책", 9) + PAGING_THREE
+    pages[f"{RESERVATION_URL}?currentPageNo=2"] = _reservation_row("2페이지 책", 9) + PAGING_THREE
+    pages[f"{RESERVATION_URL}?currentPageNo=3"] = _reservation_row("3페이지 책", 10) + PAGING_THREE
+    requested = []
+
+    info = _run_with_pages(monkeypatch, pages, requested)
+
+    assert [r["title"] for r in info["reservations"]] == ["1페이지 책"]
+    assert info["partial"] is True
+    assert any("예약" in w and "반복" in w for w in info["warnings"])
+    assert f"{RESERVATION_URL}?currentPageNo=3" not in requested
+
+
+def test_same_reservation_id_with_different_content_on_one_page_is_incomplete(monkeypatch):
+    pages = dict(PAGES)
+    pages[RESERVATION_URL] = _reservation_row("가 책", 9) + _reservation_row("나 책", 9) + EMPTY
+
+    info = _run_with_pages(monkeypatch, pages)
+
+    assert [r["title"] for r in info["reservations"]] == ["가 책"]
+    assert info["partial"] is True
+    assert any("서로 다른 내용" in w for w in info["warnings"])
+
+
+def test_exactly_repeated_reservation_row_is_counted_once_without_partial(monkeypatch):
+    pages = dict(PAGES)
+    pages[RESERVATION_URL] = _reservation_row("가 책", 9) + _reservation_row("가 책", 9) + EMPTY
+
+    info = _run_with_pages(monkeypatch, pages)
+
+    assert [r["title"] for r in info["reservations"]] == ["가 책"]
+    assert "partial" not in info
+    assert any("한 번만" in w for w in info["warnings"])
 
 
 DOORAE_SAME_TITLE_AS_LOAN = _row(
@@ -140,21 +186,54 @@ DOORAE_SAME_TITLE_AS_LOAN = _row(
 )
 
 
-def test_a_loan_that_is_also_in_transit_is_one_card_carrying_the_interlibrary_detail(monkeypatch):
-    """제목이 겹치면 카드를 하나로 두되, 상호대차 정보를 얹는다."""
+def test_a_loan_and_an_in_transit_row_sharing_only_a_title_stay_two_cards_with_a_warning(monkeypatch):
+    """제목만 같으면 같은 권이라는 근거가 없다. 두 카드를 모두 남기고 경고한다."""
     pages = dict(PAGES)
     pages[INTERLIBRARY_LOAN_URL] = DOORAE_SAME_TITLE_AS_LOAN
 
-    async def fake_login(user_id, password, timeout=10):
-        return "SESSION=stub"
+    info = _run_with_pages(monkeypatch, pages)
 
-    async def fake_fetch(url, session, max_retries=5, timeout=10):
-        return pages[url]
+    assert [b["title"] for b in info["books"]] == ["빌린 책", "빌린 책"]
+    loan, transit = info["books"]
+    assert loan["is_interlibrary"] is False
+    assert loan["library"] == "거마"
+    assert loan["due_date"] == "2026.09.01"
+    assert "possible_duplicate" not in loan
+    assert transit["is_interlibrary"] is True
+    assert transit["library"] == "돌마리"
+    assert transit["providing_library"] == "위례"
+    assert transit["due_date"] == "입수"
+    assert transit["possible_duplicate"] is True
+    assert any("제목이 같은 진행 중 상호대차" in w for w in info["warnings"])
 
-    monkeypatch.setattr(splib, "login", fake_login)
-    monkeypatch.setattr(splib, "fetch", fake_fetch)
 
-    info = asyncio.run(splib._fetch_user_info("user", "pw"))
+def _loan_row_with_copy(title, library, reg_no):
+    return _row(
+        title,
+        f'<input type="checkbox" name="check" value="REC1^{reg_no}^MA^x^y">'
+        f'<div class="info"><span><strong>{library}</strong></span></div>'
+        '<div class="info"><span>대출일 : 2026.08.01</span><span>반납예정일 : 2026.09.01</span></div>',
+        "연장",
+    )
+
+
+def _doorae_row_with_copy(title, provider, reg_no):
+    return _row(
+        title,
+        f'<input type="checkbox" name="check" value="REC2^{reg_no}^MA^x^y">'
+        '<div class="info"><span>수령도서관 : 돌마리도서관</span></div>'
+        f'<div class="info"><span>제공도서관 : {provider}</span></div>',
+        "입수",
+    )
+
+
+def test_loan_and_in_transit_with_same_provider_and_copy_id_join_into_one_card(monkeypatch):
+    """제공 도서관과 등록번호가 양쪽에서 같으면 같은 권이다. 카드 하나에 상호대차 정보를 얹는다."""
+    pages = dict(PAGES)
+    pages[LOAN_URL] = _loan_row_with_copy("빌린 책", "송파위례도서관", "REG100")
+    pages[INTERLIBRARY_LOAN_URL] = _doorae_row_with_copy("빌린 책", "송파위례도서관", "REG100")
+
+    info = _run_with_pages(monkeypatch, pages)
 
     assert [b["title"] for b in info["books"]] == ["빌린 책"]
     book = info["books"][0]
@@ -162,3 +241,17 @@ def test_a_loan_that_is_also_in_transit_is_one_card_carrying_the_interlibrary_de
     assert book["library"] == "돌마리"
     assert book["providing_library"] == "위례"
     assert book["due_date"] == "2026.09.01"
+    assert "possible_duplicate" not in book
+
+
+def test_same_copy_id_from_a_different_provider_is_not_joined(monkeypatch):
+    pages = dict(PAGES)
+    pages[LOAN_URL] = _loan_row_with_copy("빌린 책", "송파위례도서관", "REG100")
+    pages[INTERLIBRARY_LOAN_URL] = _doorae_row_with_copy("빌린 책", "송파글마루도서관", "REG100")
+
+    info = _run_with_pages(monkeypatch, pages)
+
+    assert len(info["books"]) == 2
+    assert info["books"][1]["possible_duplicate"] is True
+    assert info["books"][1]["providing_library"] == "글마루"
+    assert any("제목이 같은 진행 중 상호대차" in w for w in info["warnings"])

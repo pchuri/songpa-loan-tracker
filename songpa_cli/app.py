@@ -107,9 +107,14 @@ def fetch_report(credentials: list[dict]) -> dict:
     logging.getLogger("songpa_core").setLevel(logging.CRITICAL)
     from songpa_core.splib import get_infos_async
 
-    infos = asyncio.run(get_infos_async([
-        {"userId": c["userId"], "password": c["password"]} for c in credentials
-    ]))
+    def core_credential(c: dict) -> dict:
+        entry = {"userId": c["userId"], "password": c["password"]}
+        if c.get("expected_name"):
+            entry["expected_name"] = c["expected_name"]
+        return entry
+
+    # 계정은 하나씩 차례로 조회된다. 경고·일부만 읽음은 로그가 아니라 결과(warnings/partial)에 담긴다.
+    infos = asyncio.run(get_infos_async([core_credential(c) for c in credentials]))
     return build_report(credentials, infos)
 
 
