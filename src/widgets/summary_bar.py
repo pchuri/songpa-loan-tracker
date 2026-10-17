@@ -1,5 +1,9 @@
+from __future__ import annotations
+
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel
+
+INCOMPLETE_TOOLTIP = "일부 계정을 끝까지 읽지 못했거나 조회에 실패해 합계가 확정치가 아닙니다 (실제로는 더 많을 수 있음)."
 
 
 class SummaryItem(QFrame):
@@ -33,11 +37,20 @@ class SummaryItem(QFrame):
 
         self._count_lbl = count_lbl
 
-    def set_count(self, n: int):
+    def set_count(self, n: int, incomplete: bool = False):
+        """incomplete면 숫자가 하한일 뿐임을 글자와 툴팁으로 드러낸다."""
         if self.tier == "total":
-            self._count_lbl.setText(f"{n}권")
+            text = f"{n}권"
         else:
-            self._count_lbl.setText(str(n))
+            text = str(n)
+        if incomplete:
+            text += " (미확정)" if self.tier == "total" else "+"
+        self._count_lbl.setText(text)
+        self.setProperty("incomplete", bool(incomplete))
+        self.setToolTip(INCOMPLETE_TOOLTIP if incomplete else "")
+
+    def count_text(self) -> str:
+        return self._count_lbl.text()
 
     def set_checked(self, value: bool):
         self.setProperty("checked", bool(value))
@@ -78,10 +91,17 @@ class SummaryBar(QFrame):
         layout.addWidget(total_item)
         self._items.append(total_item)
 
-    def update_counts(self, urgent: int, approaching: int, waiting: int, total: int):
+    def update_counts(self, urgent: int, approaching: int, waiting: int, total: int, incomplete: bool = False):
+        """incomplete=True: 일부 계정이 partial이거나 실패해 모든 숫자가 하한일 뿐이다."""
         counts = {"urgent": urgent, "approaching": approaching, "waiting": waiting, "total": total}
         for item in self._items:
-            item.set_count(counts.get(item.tier, 0))
+            item.set_count(counts.get(item.tier, 0), incomplete=incomplete)
+
+    def count_text(self, tier: str) -> str:
+        for item in self._items:
+            if item.tier == tier:
+                return item.count_text()
+        return ""
 
     def set_checked_tier(self, tier: str | None):
         for item in self._items:

@@ -470,3 +470,79 @@ def test_complete_report_has_no_notice():
     report = build_report([{"label": "a"}], [{"name": "n", "books": [], "reservations": []}],
                           now=datetime(2026, 10, 10))
     assert report["complete"] is True and incomplete_notice(report) is None
+
+
+# ---------------------------------------------------------------- 같은 회원 표시 · 빈 회원 표시
+
+def test_same_site_name_on_two_accounts_makes_totals_incomplete(monkeypatch):
+    # 서로 다른 세션인데 회원 표시가 같다: 동명이인일 수도, 세션 혼선일 수도 있다. expected_name을 적어도 구별 못 한다.
+    site = FakeSite({"JSESSIONID=s1": "같은이름", "JSESSIONID=s2": "같은이름"})
+    patch_site(monkeypatch, site, {"u1": "JSESSIONID=s1", "u2": "JSESSIONID=s2"})
+    creds = [{"userId": "u1", "password": "p", "expected_name": "같은이름"},
+             {"userId": "u2", "password": "p", "expected_name": "같은 이름"}]
+    infos = asyncio.run(splib.get_infos_async(creds))
+    assert [i.get("error") for i in infos] == [None, None]
+    assert all(i.get("partial") is True for i in infos)
+    assert all(splib.SAME_NAME_WARNING in i["warnings"] for i in infos)
+    assert len(infos[0]["books"]) == 3  # 목록은 그대로 보여 준다
+    report = build_report([{"label": "a"}, {"label": "b"}], infos, now=datetime(2026, 10, 10))
+    assert report["complete"] is False
+    assert all(a["partial"] for a in report["accounts"])
+    assert "일부만 읽은 계정 2개" in incomplete_notice(report)
+
+
+def test_distinct_names_stay_complete(monkeypatch):
+    site = FakeSite({"JSESSIONID=s1": "회원갑", "JSESSIONID=s2": "회원을"})
+    patch_site(monkeypatch, site, {"u1": "JSESSIONID=s1", "u2": "JSESSIONID=s2"})
+    infos = asyncio.run(splib.get_infos_async([
+        {"userId": "u1", "password": "p"}, {"userId": "u2", "password": "p"}]))
+    assert not any(splib.SAME_NAME_WARNING in i.get("warnings", []) for i in infos)
+
+
+@pytest.mark.parametrize("barcode", [
+    '<div class="barcodeInfo"></div>',
+    '<div class="barcodeInfo">   </div>',
+    '<div class="barcodeInfo">\n  <span>회원증</span></div>',
+    '<div class="barcodeInfo"><span></span><span>회원증</span></div>',
+    '',
+])
+def test_parse_index_content_rejects_missing_or_empty_member_identity(barcode):
+    from songpa_core.splib_utils import parse_index_content
+
+    html = page(f'{barcode}<a href="{LOAN_PATH}"><span>1</span></a><a href="{ILL_PATH}"><span>0</span></a>')
+    with pytest.raises(http_utils.AuthError):
+        parse_index_content(html)
+
+
+def test_parse_index_content_reads_name_from_tag_or_text():
+    from songpa_core.splib_utils import parse_index_content
+
+    links = f'<a href="{LOAN_PATH}"><span>2</span></a><a href="{ILL_PATH}"><span>1</span></a>'
+    assert parse_index_content(page(f'<div class="barcodeInfo"> 회원갑 <span>회원증</span></div>{links}')) == (
+        "회원갑", 2, 1)
+    assert parse_index_content(page(f'<div class="barcodeInfo"><strong>회원을</strong></div>{links}'))[0] == "회원을"
+
+
+def test_empty_member_identity_at_start_or_end_is_an_error_not_equal_names(monkeypatch):
+    empty_index = page(f'<div class="barcodeInfo"> </div><a href="{LOAN_PATH}"><span>2</span></a>'
+                       f'<a href="{ILL_PATH}"><span>0</span></a>')
+
+    class EmptyIdentitySite(FakeSite):
+        def __init__(self, empty_on_call):
+            super().__init__({"JSESSIONID=s1": "회원갑"})
+            self.empty_on_call = empty_on_call
+
+        async def fetch(self, url, session, pinned_cookies=None, **kw):
+            if url == INDEX_URL:
+                n = self.index_calls.get("x", 0) + 1
+                self.index_calls["x"] = n
+                if n in self.empty_on_call:
+                    return empty_index
+            return await super().fetch(url, session, pinned_cookies=pinned_cookies, **kw)
+
+    for calls in ({1, 2}, {2}):
+        site = EmptyIdentitySite(calls)
+        patch_site(monkeypatch, site, {"u1": "JSESSIONID=s1"})
+        infos = asyncio.run(splib.get_infos_async([{"userId": "u1", "password": "p"}]))
+        assert infos[0].get("error"), calls
+        assert infos[0]["books"] == []

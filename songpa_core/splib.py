@@ -681,6 +681,9 @@ async def _fetch_user_info(user_id: str, password: str) -> dict:
 
         index_content = await get(INDEX_URL)
         name, total_borrowed_books, interlibrary_loans = parse_index_content(index_content)
+        if not normalize_identity(name):
+            # 빈 회원 표시끼리는 시작·끝 비교에서 "같다"가 되므로 신원 확인으로 쓰지 않는다.
+            raise SessionError("사이트의 회원 표시가 비어 있습니다 (로그인 세션 아님). 결과를 쓰지 않습니다.")
         expected = run.get("expected_name") if run else None
         if expected and normalize_identity(expected) != normalize_identity(name):
             raise SessionError("사이트에 표시된 회원이 설정한 신원과 다릅니다. 결과를 쓰지 않습니다.")
@@ -714,7 +717,7 @@ async def _fetch_user_info(user_id: str, password: str) -> dict:
 
         # 처음 본 회원과 끝날 때의 회원이 같은지 다시 본다(도중에 세션이 다른 계정으로 바뀌는 경우).
         end_name, _, _ = parse_index_content(await get(INDEX_URL))
-        if normalize_identity(end_name) != normalize_identity(name):
+        if not normalize_identity(end_name) or normalize_identity(end_name) != normalize_identity(name):
             raise SessionError("조회 도중 사이트의 회원 표시가 바뀌었습니다. 결과를 쓰지 않습니다.")
 
     if len(loan_rows) < total_borrowed_books:
@@ -767,6 +770,9 @@ async def _fetch_user_info_with_timeout(user_id: str, password: str) -> dict:
 
 DUPLICATE_ACCOUNT_ERROR = "같은 아이디가 두 번 등록돼 있어 조회하지 않았습니다. 계정 설정을 정리해 주세요."
 SESSION_COLLISION_ERROR = "다른 계정과 같은 세션이 감지돼 이 계정 결과를 쓰지 않습니다."
+SAME_NAME_WARNING = (
+    "다른 계정과 사이트 회원 표시가 같습니다. 동명이인인지 세션 혼선인지 구별할 수 없어 합계를 확정하지 않습니다"
+)
 
 
 def normalize_user_id(user_id) -> str:
@@ -822,6 +828,9 @@ async def get_infos_async(credentials: list[dict]) -> list[dict]:
     for index in run["collisions"]:
         infos[index] = _error_entry(credentials[index], SESSION_COLLISION_ERROR)
 
+    # 서로 다른 계정이 같은 회원 표시를 보이면 동명이인인지, 서버 쪽 세션 혼선으로 한 계정의 목록을 두 번 받은
+    # 것인지 이름만으로는 구별할 수 없다(expected_name 대조도 이름 비교라 마찬가지). 그래서 그 계정들을
+    # partial로 두어 합계를 확정치로 보지 않게 한다(목록은 그대로 보여 준다).
     names = defaultdict(list)
     for index, info in enumerate(infos):
         if not info.get("error") and info.get("name"):
@@ -829,6 +838,6 @@ async def get_infos_async(credentials: list[dict]) -> list[dict]:
     for indexes in names.values():
         if len(indexes) > 1:
             for index in indexes:
-                infos[index].setdefault("warnings", []).append(
-                    "다른 계정과 사이트 회원 표시가 같습니다 (동명이인이 아니면 계정 설정 확인)")
+                infos[index].setdefault("warnings", []).append(SAME_NAME_WARNING)
+                infos[index]["partial"] = True
     return infos
