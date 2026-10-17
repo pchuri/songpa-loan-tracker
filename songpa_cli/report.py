@@ -45,7 +45,7 @@ def normalize_book(book: dict, today: date) -> dict:
     else:
         # 반납일을 못 읽은 대출. 이동 중인 상호대차로 오해하지 않게 대출로 두고 원문을 남긴다.
         status, transit_status, days_left, due_text = LOANED, None, None, raw or None
-    return {
+    normalized = {
         "title": book.get("title") or "",
         "status": status,
         "due_date": due_text,
@@ -55,6 +55,10 @@ def normalize_book(book: dict, today: date) -> dict:
         "library": book.get("library") or "",
         "providing_library": book.get("providing_library") or "",
     }
+    if book.get("possible_duplicate"):
+        # 대출 중인 책과 제목만 같은 상호대차 건. 같은 권인지 확인되지 않아 따로 둔다.
+        normalized["possible_duplicate"] = True
+    return normalized
 
 
 def _sort_key(book: dict):
@@ -65,6 +69,8 @@ def _sort_key(book: dict):
 
 def normalize_reservation(reservation: dict) -> dict:
     return {
+        # 사이트의 예약 ID. 같은 책·같은 도서관 예약이 이미 있는지 판단할 때 쓴다(읽기 전용).
+        "reservation_id": reservation.get("reservation_id") or None,
         "title": reservation.get("title") or "",
         "library": reservation.get("library") or "",
         "ready_for_pickup": bool(reservation.get("expiry_date")),
@@ -94,8 +100,35 @@ def build_report(credentials: list[dict], infos: list[dict], now: datetime | Non
         }
         if info.get("error"):
             account["error"] = info["error"]
+            # 실패한 계정의 0은 "없음"이 아니라 "모름"이다.
+            account["partial"] = True
+        else:
+            if info.get("warnings"):
+                account["warnings"] = list(info["warnings"])
+            if info.get("partial"):
+                account["partial"] = True
         accounts.append(account)
-    return {"fetched_at": now.isoformat(timespec="seconds"), "accounts": accounts}
+    report = {
+        "fetched_at": now.isoformat(timespec="seconds"),
+        "accounts": accounts,
+        # 모든 계정을 끝까지 읽었을 때만 True. False면 합계(권수·상호대차·찾아올 책)는 확정치가 아니다.
+        "complete": not any(a.get("partial") for a in accounts),
+    }
+    return report
+
+
+def incomplete_notice(report: dict) -> str | None:
+    """합계를 확정치로 말할 수 없을 때 보여 줄 한 줄. 완전하면 None."""
+    if report.get("complete", True):
+        return None
+    failed = sum(1 for a in report["accounts"] if a.get("error"))
+    partial = sum(1 for a in report["accounts"] if a.get("partial") and not a.get("error"))
+    parts = []
+    if failed:
+        parts.append(f"조회 실패 {failed}개 계정")
+    if partial:
+        parts.append(f"일부만 읽은 계정 {partial}개")
+    return "⚠️ 합계가 확정치가 아닙니다: " + ", ".join(parts)
 
 
 def due_label(book: dict, due_soon: int) -> tuple[str, str]:
@@ -129,7 +162,8 @@ def attention_items(report: dict, due_soon: int) -> tuple[list[str], list[str]]:
         for book in account["books"]:
             label, tier = due_label(book, due_soon)
             if tier == "pickup":
-                pickups.append(f"{name}: {book['title']} (상호대차 도착 · {book['library']})")
+                note = " · 대출 중인 책과 제목 같음, 확인 필요" if book.get("possible_duplicate") else ""
+                pickups.append(f"{name}: {book['title']} (상호대차 도착 · {book['library']}{note})")
             elif tier in ("overdue", "today", "soon"):
                 due.append(f"{name}: {book['title']} ({label}, {book['due_date']})")
         for reservation in account["reservations"]:

@@ -11,7 +11,7 @@ import webbrowser
 from datetime import datetime
 from pathlib import Path
 
-from songpa_cli.report import due_label, short_name
+from songpa_cli.report import due_label, incomplete_notice, short_name
 
 HTML_FILENAME = "latest.html"
 HTML_SERVE_SECONDS = 120
@@ -90,6 +90,8 @@ def _book_cells(book: dict, due_soon: int) -> tuple[str, str, str]:
     if tier == "pickup":
         lib_html = f'<div class="inter">{lib}</div><div class="lib-sub">수령처</div>'
         loc = f'<div class="loc">📍도착: <b>{lib}</b>{f" (소장: {prov})" if prov else ""}</div>'
+        if book.get("possible_duplicate"):
+            loc += '<div class="loc">⚠️ 대출 중인 책과 제목 같음 (확인 필요)</div>'
         return lib_html, f"<div>{title}</div>{loc}", '<span class="badge badge-pickup">픽업필요</span>'
 
     if tier == "transit":
@@ -128,9 +130,12 @@ def render_html(report: dict, due_soon: int = 3) -> str:
         tabs.append(f'<a href="#card-{idx}" class="tab-pill">{esc(short_name(name))} '
                     f'<span class="tab-count">{len(books)}</span><span class="tab-inter">({inter})</span></a>')
 
+        warn_html = "".join(
+            f'<div class="err-box">⚠️ {esc(str(w))}</div>' for w in account.get("warnings", [])
+        )
         if account.get("error"):
-            body = f'<div class="err-box">⚠️ 조회 실패: {esc(str(account["error"]))}</div>'
-        elif not books:
+            body = f'<div class="err-box">⚠️ 조회 실패 (권수 모름): {esc(str(account["error"]))}</div>'
+        elif not books and not account.get("partial"):
             body = '<div class="empty">현재 이용 중인 도서가 없습니다.</div>'
         else:
             trs = "".join(
@@ -160,12 +165,15 @@ def render_html(report: dict, due_soon: int = 3) -> str:
         cards.append(
             f'<div class="card" id="card-{idx}"><div class="user-row"><span class="user-name">👤 {esc(name)}</span>'
             f'<span class="badge-total">{len(books)}권</span></div>'
-            f'<div class="stats-row">{"".join(stats)}</div>{body}{res_html}</div>'
+            f'<div class="stats-row">{"".join(stats)}</div>{warn_html}{body}{res_html}</div>'
         )
 
     subtitle = f"{len(report['accounts'])}개 계정 · 총 {total_books}권 (상호대차 {total_inter})"
     if total_pickup:
         subtitle += f" · 🔔 찾아올 책 {total_pickup}"
+    notice = incomplete_notice(report)
+    if notice:
+        subtitle += f'<div class="err-box">{esc(notice)}</div>'
     return f"""<!DOCTYPE html>
 <html lang="ko"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">

@@ -5,7 +5,7 @@ from __future__ import annotations
 import shutil
 import subprocess
 
-from songpa_cli.report import attention_items, short_name
+from songpa_cli.report import attention_items, incomplete_notice, short_name
 
 NOTIFICATION_ID = "songpa_library_status"
 
@@ -36,6 +36,9 @@ def build_notification(report: dict, due_soon: int = 3) -> tuple[str, str, str]:
     lines.append(f"📚 대출 {total}권: " + " / ".join(f"{short_name(a['label'])} {a['book_count']}" for a in accounts))
     if failed:
         lines.append("⚠️ 조회 실패: " + ", ".join(failed))
+    notice = incomplete_notice(report)
+    if notice:
+        lines.append(notice)
     return title, "\n".join(lines).strip(), priority
 
 

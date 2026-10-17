@@ -22,6 +22,21 @@ class AccountError(Exception):
     """계정 설정을 읽거나 쓸 수 없을 때."""
 
 
+def normalize_user_id(user_id) -> str:
+    """중복 판단용 아이디. 앞뒤 공백과 대소문자 차이를 무시한다."""
+    return str(user_id or "").strip().casefold()
+
+
+def duplicate_user_ids(accounts: list[dict]) -> set[str]:
+    seen, duplicates = set(), set()
+    for account in accounts:
+        key = normalize_user_id(account.get("userId"))
+        if key in seen:
+            duplicates.add(key)
+        seen.add(key)
+    return duplicates
+
+
 def config_dir() -> Path:
     custom = os.environ.get(CONFIG_DIR_ENV)
     if custom:
@@ -106,8 +121,20 @@ class AccountStore:
         ]
 
     def credentials(self, labels: list[str] | None = None) -> list[dict]:
-        """조회에 쓸 [{label, userId, password}]. labels를 주면 그 이름(또는 아이디)만."""
+        """조회에 쓸 [{label, userId, password}]. labels를 주면 그 이름(또는 아이디)만.
+
+        같은 아이디(앞뒤 공백·대소문자 차이 포함)가 두 번 있으면 비밀번호를 읽거나 로그인하기
+        전에 AccountError를 낸다. 계정에 expected_name이 있으면 결과에 함께 넣는다
+        (사이트 회원 표시와 대조하는 선택 항목).
+        """
         accounts = self._read()
+        duplicates = duplicate_user_ids(accounts)
+        if duplicates:
+            names = sorted({a.get("label") or "?" for a in accounts if normalize_user_id(a["userId"]) in duplicates})
+            raise AccountError(
+                f"같은 아이디가 여러 번 등록돼 있습니다 (이름: {', '.join(names)}). "
+                "`songpa accounts list`로 확인하고 `songpa accounts remove`로 하나만 남겨 주세요."
+            )
         if labels:
             wanted = set(labels)
             unknown = wanted - {a.get("label") for a in accounts} - {a["userId"] for a in accounts}
@@ -120,11 +147,14 @@ class AccountStore:
             password = account.get("password", "")
             if account.get("password_store") == PASSWORD_IN_KEYRING:
                 password = self._keyring_password(account["userId"])
-            result.append({
+            entry = {
                 "label": account.get("label") or account["userId"],
                 "userId": account["userId"],
                 "password": password,
-            })
+            }
+            if isinstance(account.get("expected_name"), str) and account["expected_name"].strip():
+                entry["expected_name"] = account["expected_name"].strip()
+            result.append(entry)
         return result
 
     def _keyring_password(self, user_id: str) -> str:
@@ -152,6 +182,8 @@ class AccountStore:
         for account in accounts:
             if account.get("label") == label and account["userId"] != user_id:
                 raise AccountError(f"'{label}' 이름은 다른 아이디가 이미 쓰고 있습니다.")
+            if account["userId"] != user_id and normalize_user_id(account["userId"]) == normalize_user_id(user_id):
+                raise AccountError("대소문자·공백만 다른 같은 아이디가 이미 등록돼 있습니다. 기존 계정을 먼저 삭제해 주세요.")
 
         entry = {"label": label, "userId": user_id}
         if self._keyring is not None:

@@ -11,6 +11,9 @@ from PySide6.QtWidgets import (
 from src.book_status import compute_book_status
 from src.widgets.elided_label import ElidedLabel
 
+DUPLICATE_BADGE_TEXT = "확인 필요"
+DUPLICATE_TOOLTIP = "대출 중인 책과 제목이 같은 상호대차입니다. 같은 권인지 확인되지 않았으니 사이트에서 확인하세요."
+
 
 class BookCard(QFrame):
     clicked = Signal(dict)
@@ -36,6 +39,15 @@ class BookCard(QFrame):
         dday.setProperty("tier", tier)
         dday.setAlignment(Qt.AlignmentFlag.AlignCenter)
         top_row.addWidget(dday)
+        self.duplicate_badge = None
+        if book.get("possible_duplicate"):
+            # 제목만 같은 대출·상호대차는 합치지 않고 따로 보인다. 같은 권일 수 있음을 카드에서 바로 드러낸다.
+            badge = QLabel(f"⚠️ {DUPLICATE_BADGE_TEXT}")
+            badge.setObjectName("DuplicateBadge")
+            badge.setToolTip(DUPLICATE_TOOLTIP)
+            top_row.addWidget(badge)
+            self.duplicate_badge = badge
+            self.setToolTip(DUPLICATE_TOOLTIP)
         top_row.addStretch(1)
         icon_text = self._icon_for_tier(tier)
         if icon_text:

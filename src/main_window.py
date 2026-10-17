@@ -41,6 +41,54 @@ def _all_failed(infos) -> bool:
     return bool(infos) and all(entry.get("error") for entry in infos)
 
 
+MAX_NOTICE_WARNING_LINES = 6
+DUPLICATE_DETAIL_TEXT = "대출 중인 책과 제목 같음 — 같은 권인지 사이트에서 확인"
+
+
+def _incomplete_accounts(infos):
+    """(실패 계정들, 일부만 읽은 계정들). 둘 중 하나라도 있으면 합계는 확정치가 아니다."""
+    failed = [entry for entry in (infos or []) if entry.get("error")]
+    partial = [entry for entry in (infos or []) if entry.get("partial") and not entry.get("error")]
+    return failed, partial
+
+
+def _partial_suffix(infos) -> str:
+    """헤더(최근 업데이트)에 붙일 글자. 일부만 읽은 계정이 없으면 빈 문자열."""
+    _, partial = _incomplete_accounts(infos)
+    if not partial:
+        return ""
+    return f" (일부만 읽음 {len(partial)}개 계정 · 합계 미확정)"
+
+
+def _account_warning_lines(infos) -> list:
+    """계정별 warnings를 "이름: 경고" 줄로. 실패 계정은 error로 따로 보이므로 뺀다."""
+    lines = []
+    for entry in (infos or []):
+        if entry.get("error"):
+            continue
+        for warning in entry.get("warnings") or []:
+            lines.append(f"{entry.get('name', '?')}: {warning}")
+    return lines
+
+
+def _incomplete_notice(infos):
+    """(본문, 툴팁) 또는 None. 합계 미확정 사유와 계정별 경고를 보여 준다."""
+    failed, partial = _incomplete_accounts(infos)
+    warnings = _account_warning_lines(infos)
+    if not (failed or partial or warnings):
+        return None
+    parts = []
+    if failed:
+        parts.append(f"조회 실패 {len(failed)}개 계정")
+    if partial:
+        parts.append(f"일부만 읽은 계정 {len(partial)}개")
+    head = ("⚠️ 합계가 확정치가 아닙니다: " + ", ".join(parts)) if parts else "⚠️ 확인할 점이 있습니다"
+    lines = [head] + [f"· {line}" for line in warnings[:MAX_NOTICE_WARNING_LINES]]
+    if len(warnings) > MAX_NOTICE_WARNING_LINES:
+        lines.append(f"· 외 {len(warnings) - MAX_NOTICE_WARNING_LINES}건 (마우스를 올리면 전체 보기)")
+    return "\n".join(lines), "\n".join(warnings) or head
+
+
 class MainWindow(QMainWindow):
     ENV_FIELDS: list[str] = []
 
@@ -59,6 +107,7 @@ class MainWindow(QMainWindow):
         self.dark_mode = self.config_data.get("dark_mode", False)
         self._last_updated_labels = []
         self._refresh_buttons = []
+        self._incomplete_labels = []
 
         ui_state = self.config_data.get("ui_state", {})
         self._initial_sort_key = ui_state.get("sort_key", "반납일")
@@ -242,6 +291,9 @@ class MainWindow(QMainWindow):
         self.summary_bar.tierClicked.connect(self._on_summary_clicked)
         layout.addWidget(self.summary_bar)
 
+        self.incomplete_notice = self._build_incomplete_notice()
+        layout.addWidget(self.incomplete_notice)
+
         filter_row = QHBoxLayout()
         filter_row.setSpacing(8)
         self.user_filter_bar = UserFilterBar()
@@ -291,6 +343,28 @@ class MainWindow(QMainWindow):
         for label in self._last_updated_labels:
             label.setText(text)
 
+    def _build_incomplete_notice(self) -> QLabel:
+        """합계 미확정·계정별 경고 안내. 탭마다 하나씩 두고 같은 내용을 보여 준다."""
+        label = QLabel("")
+        label.setObjectName("IncompleteNotice")
+        label.setWordWrap(True)
+        label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        label.hide()
+        self._incomplete_labels.append(label)
+        return label
+
+    def _update_incomplete_notice(self, infos):
+        notice = _incomplete_notice(infos)
+        for label in self._incomplete_labels:
+            if notice is None:
+                label.setText("")
+                label.setToolTip("")
+                label.hide()
+            else:
+                label.setText(notice[0])
+                label.setToolTip(notice[1])
+                label.show()
+
     def _set_refresh_enabled(self, enabled: bool):
         for button in self._refresh_buttons:
             button.setEnabled(enabled)
@@ -333,6 +407,9 @@ class MainWindow(QMainWindow):
         layout.setSpacing(12)
 
         layout.addLayout(self._build_header_row())
+
+        self.reservation_incomplete_notice = self._build_incomplete_notice()
+        layout.addWidget(self.reservation_incomplete_notice)
 
         filter_row = QHBoxLayout()
         filter_row.setSpacing(8)
@@ -443,6 +520,7 @@ class MainWindow(QMainWindow):
         self._clear_cards()
         self._clear_reservation_cards()
         self.summary_bar.update_counts(0, 0, 0, 0)
+        self._update_incomplete_notice(None)
         self.empty_message.setText("📚  불러오는 중...")
         self.clear_filters_button.hide()
         self.empty_state.show()
@@ -463,14 +541,16 @@ class MainWindow(QMainWindow):
                 self._show_error("모든 계정의 상태 조회에 실패했습니다.\n\n" + "\n".join(reasons))
                 self._set_last_updated("최근 업데이트: 실패")
             else:
+                # 일부만 읽은 계정이 있으면 두 경우 모두 헤더에 "합계 미확정"을 붙인다.
+                suffix = _partial_suffix(infos)
                 if failed:
-                    names = ", ".join(info["name"] for info in failed)
+                    names = ", ".join(str(info.get("name", "?")) for info in failed)
                     self._set_last_updated(
-                        f"최근 업데이트: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} (일부 실패: {names})"
+                        f"최근 업데이트: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} (일부 실패: {names}){suffix}"
                     )
                 else:
                     self._set_last_updated(
-                        f"최근 업데이트: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+                        f"최근 업데이트: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}{suffix}"
                     )
         except Exception as exc:  # noqa: BLE001
             self._show_error(f"상태 조회 실패: {exc}")
@@ -547,8 +627,12 @@ class MainWindow(QMainWindow):
                     approaching += 1
                 elif tier == "waiting":
                     waiting += 1
-        self.summary_bar.update_counts(urgent, approaching, waiting, total)
+        failed_accounts, partial_accounts = _incomplete_accounts(infos)
+        self.summary_bar.update_counts(
+            urgent, approaching, waiting, total, incomplete=bool(failed_accounts or partial_accounts)
+        )
         self.summary_bar.set_checked_tier(self.tier_filter)
+        self._update_incomplete_notice(infos)
 
         pairs = self._flatten_and_sort(infos)
 
@@ -830,12 +914,8 @@ class MainWindow(QMainWindow):
             if not self._config_warning_shown:
                 self._show_config_warning()
 
-    def _show_book_detail_dialog(self, book: dict):
-        dialog = QDialog(self)
-        dialog.setWindowTitle("도서 상세 정보")
-        dialog.resize(500, 400)
-        layout = QVBoxLayout(dialog)
-        form = QFormLayout()
+    @staticmethod
+    def _book_detail_fields(book: dict) -> list:
         fields = [
             ("제목", book.get("title", "")),
             ("도서관", book.get("library") or book.get("receiving_library", "")),
@@ -844,7 +924,17 @@ class MainWindow(QMainWindow):
         ]
         if book.get("providing_library"):
             fields.insert(2, ("제공도서관", book["providing_library"]))
-        for label, value in fields:
+        if book.get("possible_duplicate"):
+            fields.append(("확인 필요", DUPLICATE_DETAIL_TEXT))
+        return fields
+
+    def _show_book_detail_dialog(self, book: dict):
+        dialog = QDialog(self)
+        dialog.setWindowTitle("도서 상세 정보")
+        dialog.resize(500, 400)
+        layout = QVBoxLayout(dialog)
+        form = QFormLayout()
+        for label, value in self._book_detail_fields(book):
             value_label = QLabel(str(value))
             value_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
             value_label.setWordWrap(True)

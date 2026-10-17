@@ -471,6 +471,118 @@ def test_once_chips_exist_the_actual_selection_wins(window):
     assert window._current_ui_state()["reservation_selected_user"] is None
 
 
+def _loan(title, due="2026.12.20", **extra):
+    book = {"title": title, "due_date": due, "is_interlibrary": False, "library": "가상중앙",
+            "providing_library": None}
+    book.update(extra)
+    return book
+
+
+def _cards(window):
+    return [window.card_layout.itemAt(i).widget() for i in range(window.card_layout.count())]
+
+
+def test_partial_account_marks_totals_and_shows_per_account_warnings(window):
+    infos = [
+        {"name": "가", "books": [_loan("책1"), _loan("책2")], "reservations": [],
+         "partial": True, "warnings": ["대출: 50쪽에서 멈췄습니다 (표시된 마지막 쪽 60)"]},
+        {"name": "나", "books": [_loan("책3")], "reservations": [],
+         "warnings": ["대출: 같은 식별자의 행이 두 번 나와 한 번만 셉니다"]},
+    ]
+    window.last_infos = infos
+    window._populate_cards(infos)
+    window._populate_reservations(infos)
+
+    for label in (window.incomplete_notice, window.reservation_incomplete_notice):
+        assert not label.isHidden()
+        assert "합계가 확정치가 아닙니다" in label.text()
+        assert "일부만 읽은 계정 1개" in label.text()
+        assert "가: 대출: 50쪽에서 멈췄습니다" in label.text()
+        assert "나: 대출: 같은 식별자의 행이 두 번" in label.text()  # partial이 아닌 계정의 경고도 보인다
+        assert "50쪽에서 멈췄습니다" in label.toolTip()
+    assert window.summary_bar.count_text("total") == "3권 (미확정)"
+    assert window.summary_bar.count_text("urgent").endswith("+")
+
+    # 기존 사용자 선택·필터는 그대로 동작한다
+    assert window.card_layout.count() == 3
+    window.user_filter_bar.set_selection("나")
+    window._populate_cards(infos)
+    assert [b["title"] for _, b in window._flatten_and_sort(infos)] == ["책3"]
+    assert window.user_filter_bar.current_user() == "나"
+    assert window.summary_bar.count_text("total") == "3권 (미확정)"  # 합계는 필터와 무관
+
+
+def test_complete_results_show_plain_totals_without_notice(window):
+    infos = [{"name": "가", "books": [_loan("책1")], "reservations": []}]
+    window._populate_cards(infos)
+    assert window.incomplete_notice.isHidden()
+    assert window.reservation_incomplete_notice.isHidden()
+    assert window.summary_bar.count_text("total") == "1권"
+
+
+def test_failed_account_makes_totals_unknown(window):
+    infos = [
+        {"name": "가", "books": [_loan("책1")], "reservations": []},
+        {"name": "user2", "books": [], "reservations": [], "error": "조회 시간이 초과되었습니다"},
+    ]
+    window._populate_cards(infos)
+    assert "조회 실패 1개 계정" in window.incomplete_notice.text()
+    assert window.summary_bar.count_text("total") == "1권 (미확정)"
+
+
+def test_header_suffix_for_partial_accounts():
+    from src.main_window import _partial_suffix
+
+    assert _partial_suffix([{"name": "가", "books": []}]) == ""
+    assert _partial_suffix([{"name": "가", "partial": True}, {"name": "나", "partial": True},
+                            {"name": "x", "partial": True, "error": "e"}]) == " (일부만 읽음 2개 계정 · 합계 미확정)"
+
+
+def test_refresh_header_mentions_partial_results(window, monkeypatch):
+    from src import main_window as mw
+
+    raw = getattr(mw.MainWindow.refresh_status, "__wrapped__", None)
+    if raw is None:
+        pytest.skip("asyncSlot이 원래 함수를 노출하지 않는 qasync 버전")
+
+    async def fake_get_infos(users):
+        return [{"name": "가", "books": [_loan("책1")], "reservations": [], "partial": True,
+                 "warnings": ["대출: 2쪽이 앞 쪽과 같은 행을 반복합니다. 여기서 멈춥니다"]}]
+
+    monkeypatch.setattr(mw, "get_infos_async", fake_get_infos)
+    window.users = [{"userId": "synthetic", "password": "synthetic"}]
+    loop = asyncio.new_event_loop()
+    try:
+        loop.run_until_complete(raw(window))
+    finally:
+        loop.close()
+    header = window._last_updated_labels[0].text()
+    assert "일부만 읽음 1개 계정 · 합계 미확정" in header
+    assert all(label.text() == header for label in window._last_updated_labels)
+    assert not window.incomplete_notice.isHidden()
+
+
+def test_possible_duplicate_is_marked_on_card_and_in_details(window):
+    pickup = {"title": "같은제목", "due_date": "입수", "is_interlibrary": True, "library": "가상중앙",
+              "providing_library": "가상서쪽", "possible_duplicate": True}
+    infos = [{"name": "가", "books": [_loan("같은제목"), pickup], "reservations": [],
+              "warnings": ["대출 중인 책과 제목이 같은 진행 중 상호대차 1건을 따로 표시했습니다"]}]
+    window._populate_cards(infos)
+
+    cards = _cards(window)
+    assert len(cards) == 2  # 합치지 않고 둘 다 보인다
+    marked = [c for c in cards if c.duplicate_badge is not None]
+    assert len(marked) == 1 and marked[0].book is pickup
+    assert "확인 필요" in marked[0].duplicate_badge.text()
+    assert "같은 권인지" in marked[0].toolTip()
+
+    from src.main_window import MainWindow
+
+    fields = dict(MainWindow._book_detail_fields(pickup))
+    assert "같은 권인지 사이트에서 확인" in fields["확인 필요"]
+    assert "확인 필요" not in dict(MainWindow._book_detail_fields(_loan("같은제목")))
+
+
 @pytest.mark.parametrize("config", [
     {"env": None, "users": []},
     {"env": {}, "users": [], "ui_state": []},

@@ -5,7 +5,7 @@ from __future__ import annotations
 import shutil
 import unicodedata
 
-from songpa_cli.report import due_label
+from songpa_cli.report import due_label, incomplete_notice
 
 _ANSI = {
     "overdue": "1;31",
@@ -64,16 +64,24 @@ def render_text(report: dict, due_soon: int = 3, color: bool = False, columns: i
     if pickups:
         summary += f" · 찾아올 책 {pickups}"
     lines = [paint(f"송파도서관 대출 현황 · {fetched}", "bold"), summary]
+    notice = incomplete_notice(report)
+    if notice:
+        lines.append(paint(clean(notice), "error"))
 
     for account in accounts:
         lines.append("")
+        if account.get("error"):
+            lines.append(paint(f"{clean(account['label'])}  (조회 실패 · 권수 모름)", "bold"))
+            lines.append("  " + paint(clean(f"조회 실패: {account['error']}"), "error"))
+            continue
         head = f"{clean(account['label'])}  대출 {account['book_count']}권 (상호대차 {account['interlibrary_count']})"
         if account["reservations"]:
             head += f" · 예약 {len(account['reservations'])}건"
+        if account.get("partial"):
+            head += " · 일부만 읽음"
         lines.append(paint(head, "bold"))
-        if account.get("error"):
-            lines.append("  " + paint(clean(f"조회 실패: {account['error']}"), "error"))
-            continue
+        for warning in account.get("warnings", []):
+            lines.append("  " + paint(clean(f"⚠️ {warning}"), "error"))
         if not account["books"] and not account["reservations"]:
             lines.append("  " + paint("이용 중인 책이 없습니다.", "dim"))
         for book in account["books"]:
@@ -92,6 +100,8 @@ def render_text(report: dict, due_soon: int = 3, color: bool = False, columns: i
                 where = f"{book['library']} · {book['due_date']}"
                 if book["is_interlibrary"]:
                     where += " · 상호대차"
+            if book.get("possible_duplicate"):
+                where += " · 대출 중인 책과 제목 같음(확인 필요)"
             lines.extend(row(clean(label), tier, clean(book["title"]), paint(clean(where), "dim")))
         for reservation in account["reservations"]:
             if reservation["ready_for_pickup"]:

@@ -32,11 +32,16 @@ def parse_index_content(content):
     LOAN_PATH = urlparse(LOAN_URL).path
     INTERLIBRARY_PATH = urlparse(INTERLIBRARY_LOAN_URL).path
 
-    soup = BeautifulSoup(content, 'html.parser')
+    soup = BeautifulSoup(content or "", 'html.parser')
     barcode_info_div = soup.find('div', {'class': 'barcodeInfo'})
     if not barcode_info_div or not barcode_info_div.contents:
         raise AuthError("로그인 세션이 유효하지 않습니다 (페이지에 사용자 정보 없음).")
-    name = barcode_info_div.contents[0].strip()
+    first = barcode_info_div.contents[0]
+    # 첫 항목이 글자가 아니라 태그일 수도 있다(Tag에는 strip이 없다). 어느 쪽이든 글자만 읽는다.
+    name = first.strip() if isinstance(first, str) else first.get_text(strip=True)
+    if not name:
+        # 빈 회원 표시를 이름으로 받아들이면 시작·끝 이름이 둘 다 ""로 "같다"고 판정된다.
+        raise AuthError("로그인 세션이 유효하지 않습니다 (회원 표시가 비어 있음).")
 
     loan_status_link = soup.find('a', href=LOAN_PATH)
     interlibrary_status_link = soup.find('a', href=INTERLIBRARY_PATH)
