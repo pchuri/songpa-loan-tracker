@@ -275,13 +275,16 @@ function setup({ mem = members(), accounts = [A, B], opts = {}, runsInWidget = f
 const titles = (r) => r.items.map((i) => i.title).sort();
 const requestsFor = (t, p) => t.env.log.requests.filter((r) => r.url.startsWith(BASE + p));
 
-// 로그인 요청에는 스크립트가 쿠키를 넣지 않고, 이후 모든 요청은 방금 받은 JSESSIONID를 직접 고정해야 한다
+// 로그인 요청은 JSESSIONID 없는 익명 Cookie를 명시하고(공유 저장소 병합 방지), 이후 모든 요청은 방금 받은 JSESSIONID를 직접 고정해야 한다
+const ANON_LOGIN_COOKIE = "cookie=1";
 function assertCookiePinned(t) {
   let k = -1;
   for (const r of t.env.log.requests) {
     if (!r.url.startsWith(BASE)) continue;
     if (r.url.startsWith(LOGIN)) {
-      assert.equal(r.explicitCookie, false);
+      assert.equal(r.explicitCookie, true, "login must send an explicit anonymous cookie");
+      assert.equal(r.cookie, ANON_LOGIN_COOKIE);
+      assert.doesNotMatch(r.cookie, /JSESSIONID/i);
       k++;
       continue;
     }
@@ -443,6 +446,63 @@ test("missing JSESSIONID never falls back to the shared automatic cookie", async
   const bobLogin = reqs.findIndex((r) => String(r.body || "").includes("userId=bob"));
   assert.equal(reqs.length, bobLogin + 1, "no request may follow a login without a fresh cookie");
   assert.ok(t.env.jar.cookie, "the shared jar still held an earlier cookie that must not be used");
+});
+
+test("login sends an explicit anonymous cookie so a preloaded stale jar session is never sent or reused", async () => {
+  // 서버 모델: 로그인 요청에 JSESSIONID가 있으면 그 세션을 그대로 재사용(새 세션 미발급, Set-Cookie 없음)하고,
+  // JSESSIONID가 없을 때만 새 세션을 발급한다. 스크립트가 공유 저장소 쿠키를 흘리면 B는 새 세션을 받지 못한다.
+  const STALE = "STALEOLDJAR0001XYZ";
+  const loginCookies = [];
+  const t = setup({
+    opts: {
+      override: (req, ctx, lib) => {
+        if (!ctx.path.endsWith("memberLoginProc.do")) return null;
+        loginCookies.push(req.cookie);
+        if (ctx.sid) return { status: 302, location: "/intro/index.do" }; // 기존 세션 유지 → Set-Cookie 없음
+        return null; // 기본 처리: 새 세션 발급
+      }
+    }
+  });
+  t.lib.sessions.set(STALE, "bob"); // 이전 실행·다른 계정이 남긴 저장소 세션
+  t.env.jar.cookie = STALE;
+  const [a, b] = await t.fetchAll();
+  assert.equal(a.status, "ok");
+  assert.equal(b.status, "ok");
+  assert.deepEqual(titles(a), ["A 책 1", "A 책 2"]);
+  assert.deepEqual(titles(b), ["B 책 1"]);
+  assert.equal(loginCookies.length, 2);
+  assert.ok(loginCookies.every((c) => c === ANON_LOGIN_COOKIE), JSON.stringify(loginCookies));
+  assert.equal(t.lib.issued.length, 2);
+  assert.notEqual(t.lib.issued[0], t.lib.issued[1], "each login must get its own fresh session");
+  assert.ok(!t.lib.issued.includes(STALE));
+  for (const r of t.env.log.requests) assert.ok(!String(r.cookie || "").includes(STALE), `stale jar cookie leaked: ${r.url}`);
+  assertCookiePinned(t);
+});
+
+test("control: a login that leaks the jar cookie would get no fresh session and fail closed", async () => {
+  // 위 서버 모델이 의미 있는지 확인: 로그인 Cookie를 제거해 저장소가 붙게 하면 새 세션이 없어 오류로 끝나야 한다
+  const STALE = "STALEOLDJAR0002XYZ";
+  const t = setup({
+    accounts: [A],
+    opts: { override: (req, ctx) => (ctx.path.endsWith("memberLoginProc.do") && ctx.sid ? { status: 302, location: "/intro/index.do" } : null) }
+  });
+  t.lib.sessions.set(STALE, "bob");
+  t.env.jar.cookie = STALE;
+  const RealRequest = t.env.globals.Request;
+  t.env.globals.Request = class extends RealRequest {
+    async loadString() {
+      if (String(this.url).startsWith(LOGIN) && this.headers) delete this.headers.Cookie;
+      return super.loadString();
+    }
+  };
+  // env.globals는 createEnv/setup에서 이미 VM 컨텍스트 전역 객체로 쓰이므로, 위 대입이 곧 VM 안의 Request를 바꾼다.
+  // 스크립트를 다시 로드하지 않고(이중 const 선언 방지) 기존 평가기로 래퍼가 실제 적용됐는지 확인한다.
+  assert.equal(t.run("Request"), t.env.globals.Request, "wrapper must be the Request seen inside the existing VM");
+  const [a] = await t.fetchAll([A]);
+  assert.equal(a.status, "error");
+  assert.match(a.error, /JSESSIONID/);
+  assert.equal(t.env.log.requests[0].cookie, `JSESSIONID=${STALE}`);
+  assert.equal(t.env.log.requests.length, 1);
 });
 
 test("multiple or invalid JSESSIONID values in the login response are rejected", async () => {

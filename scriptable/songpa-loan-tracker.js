@@ -591,8 +591,14 @@ function newRequest(url, session, timeoutSec) {
   return req;
 }
 
+// 로그인 요청에는 JSESSIONID가 없는 무해한 익명 Cookie를 명시한다.
+// Cookie를 비워 두면 공유 쿠키 저장소가 이전 계정의 JSESSIONID를 붙일 수 있고, 빈 값은 저장소 병합을 막지 못할 수 있다.
+// (macOS 합성 시험에서 비어 있지 않은 명시 Cookie는 그대로 전송되고 저장소와 합쳐지지 않음을 확인. 실제 iPhone·실서버는 미확인)
+const ANONYMOUS_LOGIN_COOKIE = "cookie=1";
+
 async function login(account, ctx) {
   const req = newRequest(LOGIN_URL, null, timeoutFor(ctx));
+  req.headers["Cookie"] = ANONYMOUS_LOGIN_COOKIE;
   req.method = "POST";
   req.headers["Content-Type"] = "application/x-www-form-urlencoded";
   req.body = `userId=${encodeURIComponent(account.id)}&password=${encodeURIComponent(account.pw)}`;
