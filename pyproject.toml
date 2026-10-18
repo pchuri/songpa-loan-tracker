@@ -20,14 +20,14 @@ songpa = "songpa_cli.app:main"
 # PySide6 6.10.1은 파이썬 3.15용이 없다. CLI 설치까지 막지 않도록 여기에만 제한을 둔다.
 desktop = [
     "PySide6==6.10.1; python_version < '3.15'",
-    "cryptography>=49.0.0",
+    "cryptography>=50.0.0",
     "keyring>=24.0.0",
     "python-dotenv>=1.2.2",
     "qasync==0.27.0",
 ]
 dev = [
     "pyinstaller>=6.22.3",
-    "pytest>=8.0",
+    "pytest>=9.0.3",
 ]
 
 [build-system]
@@ -47,3 +47,5 @@ default-groups = ["desktop", "dev"]
 [tool.uv.dependency-groups]
 # python-dotenv>=1.2.2는 Python 3.10 이상이 필요하다. CLI/Termux의 3.9 지원은 유지한다.
 desktop = {requires-python = ">=3.10"}
+# pytest>=9.0.3은 Python 3.10 이상이 필요하다. CLI/Termux의 3.9 지원은 유지한다.
+dev = {requires-python = ">=3.10"}
