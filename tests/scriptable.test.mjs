@@ -101,8 +101,8 @@ function createEnv({ handler = async () => ({ throw: "no network" }), runsInWidg
     documentsDirectory: () => "/local/Documents",
     fileExists: (p) => env.files.has(p),
     readString: (p) => (env.files.has(p) ? env.files.get(p) : null),
-    writeString: (p, s) => env.files.set(p, String(s)), // Scriptable writeString은 덮어쓴다
-    remove: (p) => env.files.delete(p),
+    writeString: (p, s) => { if (p === LEASE) (log.events ||= []).push("lease:write"); return env.files.set(p, String(s)); }, // Scriptable writeString은 덮어쓴다
+    remove: (p) => { if (p === LEASE) (log.events ||= []).push("lease:remove"); return env.files.delete(p); },
     // Scriptable 문서의 copy 계약: 대상 파일이 이미 있으면 실패하고 복사하지 않는다 (writeString·move와 다름).
     // copyHook: 복사 직전에 실행 (다른 실행이 먼저 잠금을 만드는 경쟁을 흉내). failCopy: 원인과 무관한 복사 실패.
     copy: (src, dst) => {
@@ -133,13 +133,22 @@ function createEnv({ handler = async () => ({ throw: "no network" }), runsInWidg
     static dynamic(l, d) { return { l, d }; }
   }
   class WebView {
+    constructor() {
+      this.loads = 0; this.presents = 0; this.evals = 0;
+      (log.webviews ||= []).push(this);
+      (log.events ||= []).push("webview:new");
+    }
     async loadHTML(h) {
+      (log.events ||= []).push("webview:load");
       if (env.failLoadHTML) throw new Error("render failed");
+      this.loads++;
       if (this.slot===undefined) {this.slot=log.html.length;log.html.push(h);} else log.html[this.slot]=h;
       (log.frames ||= []).push(h);
     }
-    present() {return new Promise(resolve=>{this.close=resolve;});}
+    // present의 Promise는 화면을 닫으면 끝난다. 합성 모델: 다음 틱에 사용자가 닫음 (env.holdPresentation이면 close() 때까지 열림)
+    present() {(log.events ||= []).push("webview:present");this.presents++;return new Promise(resolve=>{this.close=resolve;if(!env.holdPresentation) setImmediate(resolve);});}
     async evaluateJavaScript(code) {
+      (log.events ||= []).push("webview:eval");this.evals++;
       const view=this;
       const body={set innerHTML(value){log.html[view.slot]=value;(log.frames ||= []).push(value);},setAttribute(name,value){if(name==="data-finished"&&value==="true") view.close();}};
       return vm.runInNewContext(code,{document:{body},window:{scrollY:0,scrollTo(){}}});
@@ -3193,18 +3202,114 @@ test("progress callback publishes only final-proven accounts before the next log
  const placeholders=plain(t.run("progressResults")([A,B],frames[1]));assert.equal(placeholders[1].status,"pending");assert.equal(placeholders[1].items.length,0);
 });
 
-test("progressive WebView is presented before queries finish and final render permits dismissal",async()=>{
- const t=setup();await t.run("main")();
- assert.match(t.env.log.frames[0],/조회 중 · 0\/2/);assert.ok(!t.env.log.frames[0].includes("A 책 1"));
- assert.ok(t.env.log.frames.some(h=>h.includes("A 책 1")&&h.includes("대기")===false&&h.includes("조회 중")));
- assert.ok(t.env.log.html[0].includes("B 책 1"));
+// ================================================================ single-render-1: 앱 실행은 최종 화면 하나만 (합성 값만)
+// 조회와 실행 표시 해제가 끝난 뒤 WebView 하나를 한 번 불러와 한 번 띄운다. 합성 모의 객체 결과이며 실제 iPhone 동작을 증명하지 않는다.
+const srViews = (t) => t.env.log.webviews || [];
+const srEvents = (t) => t.env.log.events || [];
+function srAssertSingleFinal(t) {
+  const views = srViews(t);
+  assert.equal(views.length, 1, "exactly one WebView");
+  assert.equal(views[0].loads, 1, "one HTML load");
+  assert.equal(views[0].presents, 1, "one presentation");
+  assert.equal(views[0].evals, 0, "no evaluateJavaScript DOM update during main");
+  assert.equal(t.env.log.frames.length, 1, "no provisional frames");
+  assert.ok(!(t.env.log.timers || []).includes(1500), "no 1500 ms presentation yield");
+  assert.deepEqual(srEvents(t).filter((e) => e.startsWith("webview:")), ["webview:new", "webview:load", "webview:present"]);
+  return t.env.log.html[0];
+}
+
+test("single-render: no WebView is created, loaded or presented until collection completes; main forwards no progress callback", async () => {
+  let t;
+  const viewsDuringCollection = [];
+  t = setup({ opts: { override: async () => { viewsDuringCollection.push(srViews(t).length); return null; } } });
+  t.env.globals.__srProgress = [];
+  t.run("fetchAllAccounts = (orig => async (...a) => { __srProgress.push(a[3]); return orig(...a); })(fetchAllAccounts)");
+  await t.run("main")();
+  assert.ok(viewsDuringCollection.length > 0, "library requests happened");
+  assert.ok(viewsDuringCollection.every((n) => n === 0), "no WebView existed during any library request");
+  assert.deepEqual(t.env.globals.__srProgress, [null], "main does not forward onProgress");
+  const html = srAssertSingleFinal(t);
+  assert.ok(html.includes("A 책 1") && html.includes("B 책 1"));
+  assert.doesNotMatch(html, /조회 중 · /);
+  assert.match(html, /window\.__songpaFinal=true/);
+  assert.equal(typeof t.run("updateProgressView"), "function", "helper capability kept (unused by main)");
+  assert.doesNotMatch(readFileSync(TRACKER, "utf8"), /setAttribute\("aria-busy"/);
 });
 
-test("renderer yields native presentation before first DOM update and omits aria-busy", async()=>{
- const t=setup();await t.run("main")();
- assert.equal(t.env.log.timers[0],1500);
- assert.equal(t.env.log.frames.filter(h=>h.includes("조회 중 · 0/2")).length,1,"initial DOM is not needlessly replaced during presentation");
- assert.doesNotMatch(readFileSync(TRACKER,"utf8"),/setAttribute\("aria-busy"/);
+test("single-render: the run's own lease file is removed before the WebView is created, loaded or presented", async () => {
+  const t = setup();
+  await t.run("main")();
+  const ev = srEvents(t);
+  const w = ev.indexOf("lease:write"), r = ev.indexOf("lease:remove"), n = ev.indexOf("webview:new");
+  assert.ok(w >= 0 && r > w && n > r, ev.join(","));
+  assert.equal(ev.filter((e) => e === "lease:write").length, 1);
+  assert.ok(ev.slice(0, n).every((e) => !e.startsWith("webview:")));
+  srAssertSingleFinal(t);
+  assert.equal(t.env.files.has(LEASE), false);
+});
+
+test("single-render: a live foreign lease gives one honest deferred final page, no library request and no lease change", async () => {
+  const foreign = JSON.stringify({ owner: "other", expiresAt: Date.now() + 60000, kind: "widget" });
+  const t = setup({ files: { [LEASE]: foreign } });
+  await t.run("main")();
+  assert.equal(requestsFor(t, "/intro").length, 0, "no library request");
+  assert.equal(t.env.files.get(LEASE), foreign, "foreign lease byte-identical (no force clear)");
+  assert.ok(!srEvents(t).some((e) => e.startsWith("lease:")), "no lease write or remove");
+  const html = srAssertSingleFinal(t);
+  assert.match(html, /다른 실행이 조회 중/);
+  assert.match(html, /실행 표시 종류 위젯/);
+  assert.doesNotMatch(html, /모두 조회 실패|조회 오류|로그인 실패|조회 중 · /);
+});
+
+test("single-render: updater early return creates no WebView, takes no lease and contacts no library", async () => {
+  const lib = makeLibrary(members());
+  const offer = readFileSync(TRACKER, "utf8").replace(/const SCRIPT_VERSION = "[^"]+";/, 'const SCRIPT_VERSION = "9.9.9";');
+  const env = createEnv({ handler: async (req) => (req.url.startsWith(BASE) ? lib.handler(req) : { status: 200, body: offer }), files: { "/local/Documents/songpa-loan-tracker.js": "// installed (synthetic)\n" }, keychain: { SPLIB_ACCOUNTS: JSON.stringify([A, B]) } });
+  env.alertScript.push({ choice: 0 }, { choice: 0 });
+  await loadScript(TRACKER, env.globals)("main")();
+  assert.equal(env.files.get("/local/Documents/songpa-loan-tracker.js"), offer);
+  assert.equal((env.log.webviews || []).length, 0);
+  assert.equal(env.log.html.length, 0);
+  assert.ok(!(env.log.events || []).some((e) => e.startsWith("lease:")));
+  assert.equal(env.files.has(LEASE), false);
+  assert.equal(env.log.requests.filter((r) => r.url.startsWith(BASE)).length, 0);
+});
+
+test("single-render: widget runs keep collectData + createWidget and never create a WebView", async () => {
+  const t = setup({ runsInWidget: true });
+  t.env.globals.__srProgress = [];
+  t.run("fetchAllAccounts = (orig => async (...a) => { __srProgress.push(a[3]); return orig(...a); })(fetchAllAccounts)");
+  await t.run("main")();
+  assert.equal(srViews(t).length, 0);
+  assert.equal(t.env.log.html.length, 0);
+  assert.equal(t.env.log.widgets.length, 1);
+  assert.match(widgetTexts(t), /A 책 1/);
+  assert.deepEqual(t.env.globals.__srProgress, [null]);
+  assert.equal(t.env.files.has(LEASE), false);
+});
+
+test("single-render: an exception during collection releases the owned lease and creates no WebView", async () => {
+  const t = setup();
+  t.run("fetchAllAccounts = async () => { throw new Error('boom-single-render'); }");
+  await assert.rejects(t.run("main")(), /boom-single-render/);
+  const ev = srEvents(t);
+  assert.ok(ev.indexOf("lease:write") >= 0 && ev.indexOf("lease:remove") > ev.indexOf("lease:write"), ev.join(","));
+  assert.equal(t.env.files.has(LEASE), false);
+  assert.equal(srViews(t).length, 0);
+  assert.match(t.env.log.alerts.at(-1).message, /MAIN_ERROR/);
+});
+
+test("single-render: a final render failure happens only after collection and lease cleanup", async () => {
+  const t = setup();
+  t.env.failLoadHTML = true;
+  await assert.rejects(t.run("main")(), /render failed/);
+  const ev = srEvents(t);
+  const r = ev.indexOf("lease:remove"), n = ev.indexOf("webview:new"), l = ev.indexOf("webview:load");
+  assert.ok(r >= 0 && n > r && l > n, ev.join(","));
+  assert.ok(!ev.includes("webview:present"));
+  assert.ok(requestsFor(t, PROFILE_PATH).length > 0, "collection really ran before the render failed");
+  assert.equal(t.env.files.has(LEASE), false);
+  assert.match(t.env.log.alerts.at(-1).message, /MAIN_ERROR/);
 });
 
 test("a native DOM update that never settles returns failure within the bounded wait",async()=>{
@@ -3450,8 +3555,8 @@ test("display group: placeholder owning/providing library strings are unknown, n
 
 test("v1.2.6 title-display-1: display totals say 건; progressive guards preserved", async () => {
   const run = loadScript(TRACKER, createEnv().globals);
-  assert.equal(run("SCRIPT_VERSION"), "1.2.8");
-  assert.equal(run("NATIVE_PROBE_BUILD"), "copy-evidence-1");
+  assert.equal(run("SCRIPT_VERSION"), "1.2.9");
+  assert.equal(run("NATIVE_PROBE_BUILD"), "single-render-1");
   assert.equal(run("NATIVE_TRACE"), false);
   const t = setup();
   const html = t.run("buildHtmlPage")(await t.fetchAll());
@@ -3462,7 +3567,7 @@ test("v1.2.6 title-display-1: display totals say 건; progressive guards preserv
   assert.match(w.text, /총 3건/);
   assert.doesNotMatch(w.text, /총 \d+권/);
   const src = readFileSync(TRACKER, "utf8");
-  assert.match(src, /Timer\.schedule\(1500,false,resolve\)/);
+  assert.doesNotMatch(src, /Timer\.schedule\(1500,false,resolve\)/, "single-render-1: no 1500 ms presentation yield");
   assert.match(src, /Timer\.schedule\(2500,false/);
   assert.match(src, /window\.__songpaFinal=\$\{s\.pending===0\}/);
 });
@@ -3998,26 +4103,51 @@ test("return-location: another account's receipt never influences a booksole loa
   assert.ok(texts.some((x) => x.includes(`${RL_TITLE} (스마트)`)));
 });
 
-test("copy-evidence-1 release constants: version strictly newer than released 1.2.7, trace off", () => {
+function loadTrackerSource(src, globals) {
+  const entry = /\nawait main\(\);\s*\nScript\.complete\(\);\s*$/;
+  assert.match(src, entry);
+  const ctx = vm.createContext(globals);
+  vm.runInContext(src.replace(entry, "\n"), ctx, { filename: "installed-model.js" });
+  return (expr) => vm.runInContext(expr, ctx);
+}
+
+test("single-render-1 release constants: 1.2.9 strictly newer than installed 1.2.8 and released 1.2.7, trace off", () => {
   const run = loadScript(TRACKER, createEnv().globals);
-  assert.equal(run("SCRIPT_VERSION"), "1.2.8");
-  assert.equal(run("NATIVE_PROBE_BUILD"), "copy-evidence-1");
+  assert.equal(run("SCRIPT_VERSION"), "1.2.9");
+  assert.equal(run("NATIVE_PROBE_BUILD"), "single-render-1");
   assert.equal(run("NATIVE_TRACE"), false);
-  assert.equal(run("isNewerVersion")(run("SCRIPT_VERSION"), "1.2.7"), true);
-  assert.equal(run("isNewerVersion")("1.2.7", run("SCRIPT_VERSION")), false);
+  const newer = run("isNewerVersion");
+  for (const installed of ["1.2.8", "1.2.7"]) {
+    assert.equal(newer(run("SCRIPT_VERSION"), installed), true, installed);
+    assert.equal(newer(installed, run("SCRIPT_VERSION")), false, installed);
+  }
+  assert.equal(newer(run("SCRIPT_VERSION"), run("SCRIPT_VERSION")), false, "same version is never offered");
 });
 
-test("copy-evidence-1 update path: published source keeps the PR16 completeness invariant and a released 1.2.7 client sees a strictly newer 1.2.8", () => {
-  // Published-artifact completeness invariant: trailing-entrypoint guard added by PR16, not yet in any released client.
-  // Legacy compatibility: a released 1.2.7 client uses only the version regex and strict numeric comparison.
+test("single-render-1 update path: the actual published source passes an installed 1.2.8 updater gate and is written byte-identically", async () => {
   const src = readFileSync(TRACKER, "utf8");
-  assert.match(src, /\nawait main\(\);\s*\nScript\.complete\(\);\s*$/, "published artifact ends with the trailing entrypoint (PR16 completeness invariant, not a released 1.2.7 gate)");
-  const m = src.match(/const\s+SCRIPT_VERSION\s*=\s*["']([^"']+)["']/);
-  assert.ok(m, "legacy version regex finds SCRIPT_VERSION");
-  assert.equal(m[1], "1.2.8");
-  assert.match(m[1], /^\d+\.\d+\.\d+$/, "strictly numeric: legacy Number() split never yields NaN");
-  const run = loadScript(TRACKER, createEnv().globals);
-  assert.equal(run("isNewerVersion")(m[1], "1.2.7"), true, "released 1.2.7 clients are offered the update");
+  assert.match(src, /\nawait main\(\);\s*\nScript\.complete\(\);\s*$/, "published artifact ends with the trailing entrypoint");
+  const versions = [...src.matchAll(/const\s+SCRIPT_VERSION\s*=\s*["']([^"']+)["']/g)].map((m) => m[1]);
+  assert.deepEqual(versions, ["1.2.9"], "one version constant; legacy regex reads it");
+  assert.match(versions[0], /^\d+\.\d+\.\d+$/);
+  // 설치된 1.2.8 모델: 같은 업데이트 코드에 버전 상수만 1.2.8 (합성). 실제 원격 응답은 이 저장소의 실제 스크립트 본문.
+  const installedPath = "/local/Documents/songpa-loan-tracker.js";
+  const installedSrc = src.replace(/const SCRIPT_VERSION = "[^"]+";/, 'const SCRIPT_VERSION = "1.2.8";');
+  assert.notEqual(installedSrc, src);
+  for (const runsInWidget of [false, true]) {
+    const env = createEnv({ handler: async (req) => (req.url.startsWith(BASE) ? { throw: "library must not be contacted (synthetic)" } : { status: 200, body: src }), runsInWidget, files: { [installedPath]: installedSrc } });
+    env.alertScript.push({ choice: 0 }, { choice: 0 });
+    const run = loadTrackerSource(installedSrc, env.globals);
+    assert.equal(run("SCRIPT_VERSION"), "1.2.8");
+    const r = plain(await run("checkUpdateIfNeeded")());
+    if (runsInWidget) {
+      assert.deepEqual(r, { hasUpdate: true, remoteVer: "1.2.9" });
+      assert.equal(env.files.get(installedPath), installedSrc, "widget never writes");
+    } else {
+      assert.deepEqual(r, { updated: true });
+      assert.equal(env.files.get(installedPath), src, "exact published text written");
+    }
+  }
 });
 
 
@@ -4256,7 +4386,7 @@ test("return-location consistency: normal, resolved booksole and unknown booksol
 });
 
 // ---------------------------------------------------------------- 진행 화면과 오류
-test("progress: starts as 조회 중, updates account by account, and a mix of ok / parse error / network failure ends in a non-empty final page", async () => {
+test("progress (single-render-1): a mix of ok / parse error / network failure is shown only as one non-empty final page, never as progressive frames", async () => {
   const brokenLoan = `<html><body><header>${barcodeInfo({ name: "이두리", memberId: "22220002" })}</header><div class="list"><div class="myArticle-list"><div class="title">가상 깨진 행</div><div class="statusBox">대출중</div></div></div></body></html>`;
   const t = setup({
     mem: threeMembers(),
@@ -4268,16 +4398,17 @@ test("progress: starts as 조회 중, updates account by account, and a mix of o
     } }
   });
   await t.run("main")();
-  const frames = t.env.log.frames;
-  assert.match(frames[0], /조회 중 · 0\/3/, "first frame is the in-progress page");
-  assert.ok(!frames[0].includes(COMMON), "no rows before any account finished");
-  const firstWithA = frames.findIndex((h) => h.includes("A 책 1"));
-  assert.ok(firstWithA > 0 && /조회 중/.test(frames[firstWithA]), "account A appears while later accounts are still in progress");
+  assert.equal(t.env.log.frames.length, 1, "exactly one HTML load");
+  assert.equal(t.env.log.webviews.length, 1);
+  assert.equal(t.env.log.webviews[0].presents, 1);
+  assert.equal(t.env.log.webviews[0].evals, 0, "no DOM replacement");
   const final = t.env.log.html[0];
+  assert.equal(final, t.env.log.frames[0]);
   assert.ok(final.length > 2000 && /<tbody>/.test(final), "final page has content (not a blank screen)");
-  assert.doesNotMatch(final, /조회 중 · /, "final page is not left in the in-progress state");
-  assert.ok(final.includes("A 책 1"), "successful account still shown");
-  for (const acc of [B, C]) assert.ok(final.includes(acc.label), `${acc.id}: failed account still named on the final page`);
+  assert.doesNotMatch(final, /조회 중 · /, "no in-progress state");
+  assert.match(final, /window\.__songpaFinal=true/);
+  assert.ok(final.includes("A 책 1"), "successful account shown");
+  for (const acc of [B, C]) assert.ok(final.includes(acc.label), `${acc.id}: failed account named on the final page`);
   assert.doesNotMatch(final, /현재 이용 중인 도서가 없습니다/);
   assert.equal(t.env.log.alerts.length, 0, "no MAIN_ERROR alert");
 });
@@ -4294,6 +4425,11 @@ test("progress: when every account fails the final page and widget say 조회 �
     } else {
       const final = t.env.log.html[0];
       assert.ok(final.includes(A.label) && final.includes(B.label));
+      assert.equal(final, t.env.log.frames[0], "the final page is the only HTML load");
+      assert.equal(t.env.log.frames.length, 1);
+      assert.equal(t.env.log.webviews.length, 1);
+      assert.equal(t.env.log.webviews[0].evals, 0, "no progressive DOM updates");
+      assert.match(final, /모두 조회 실패/);
       assert.doesNotMatch(final, /현재 이용 중인 도서가 없습니다|조회 중 · /);
     }
   }
@@ -4339,7 +4475,7 @@ test("update: cancel, widget mode, same/older version, offline and write failure
   assert.equal(widget.env.log.alerts.length, 0, "widget never prompts");
   assert.equal(widget.env.files.get(INSTALLED), INSTALLED_CODE, "widget never writes");
 
-  for (const ver of ["1.2.8", "1.2.7", "1.2.6", "1.0", "0.9.9"]) {
+  for (const ver of ["1.2.9", "1.2.8", "1.2.7", "1.2.6", "1.0", "0.9.9"]) {
     const same = updaterEnv({ status: 200, body: remoteScript(ver) });
     assert.deepEqual(plain(await same.run("checkUpdateIfNeeded")()), { hasUpdate: false }, ver);
     assert.equal(same.env.log.alerts.length, 0, ver);
@@ -4580,4 +4716,363 @@ test("copy split: conflicting or ambiguous 등록번호 evidence never splits", 
     assert.ok(r.items.some((x) => x.displayCopyExplicit === false), name);
     assert.equal(dcGroups(run, r).length, 1, name);
   }
+});
+
+// ================================================================ lease recovery (shared-lease UX)
+// 합성 계정·응답·파일만. 두 VM 컨텍스트가 같은 파일 Map을 쓰면 같은 기기의 앱·위젯 프로세스가 local Library를 공유하는 모델이다 (실기기 공유 여부는 미확인).
+function lrPeer({ runsInWidget = false, files = null, hold = false } = {}) {
+  let open = () => {};
+  const gate = hold ? new Promise((r) => { open = r; }) : null;
+  const state = { loanSeen: false };
+  const lib = makeLibrary(members(), { override: async (req, ctx) => { if (ctx.path === LOAN_PATH) { state.loanSeen = true; if (gate) await gate; } return null; } });
+  const env = createEnv({ handler: lib.handler, runsInWidget, keychain: { SPLIB_ACCOUNTS: JSON.stringify([A, B]) } });
+  if (files) env.files = files;
+  const run = loadScript(TRACKER, env.globals);
+  return { env, lib, run, state, open: () => open(), main: () => run("main")(), html: () => env.log.html.at(-1), widget: () => ((env.log.widgets.at(-1) || {}).texts || []).join("\n"), libRequests: () => env.log.requests.filter((r) => r.url.startsWith(BASE)).length };
+}
+async function lrUntil(cond, what) {
+  for (let i = 0; i < 5000 && !cond(); i++) await tick();
+  assert.ok(cond(), what);
+}
+const lrBusySec = (text) => { const m = /약 (\d+)초/.exec(String(text || "")); return m ? Number(m[1]) : null; };
+
+test("lease recovery: a widget killed before finally leaves the original 270 s lease; the app respects it for its whole lifetime (no forced unlock) and recovers only after expiry", async () => {
+  const widget = lrPeer({ runsInWidget: true, hold: true });
+  widget.main(); // iOS 강제 종료 모델: 다시 진행되지 않으므로 finally가 돌지 않는다
+  await lrUntil(() => widget.state.loanSeen, "widget is mid-collection");
+  const left = widget.env.files.get(LEASE);
+  const ttl = JSON.parse(left).expiresAt - Date.now();
+  assert.ok(ttl > 269000 && ttl <= 270000, `widget lease length ${ttl}`);
+  assert.equal(JSON.parse(left).kind, "widget");
+  assert.equal(JSON.parse(left).ttlMs, undefined, "withdrawn candidate field is not written");
+  const app = lrPeer({ files: widget.env.files });
+  let skew = 0;
+  app.run("clock").now = () => Date.now() + skew;
+  for (skew of [30000, 61000, 200000]) {
+    await app.main();
+    const html = app.html();
+    assert.match(html, /다른 실행이 조회 중/, `skew ${skew}`);
+    const sec = lrBusySec(html);
+    assert.ok(sec >= 1 && sec <= 270 - Math.floor(skew / 1000), `skew ${skew}: ${sec}`);
+    assert.match(html, /실행 표시 종류 위젯/);
+    assert.equal(app.env.files.get(LEASE), left, `skew ${skew}: live widget lease untouched`);
+    assert.equal(app.libRequests(), 0);
+  }
+  skew = 271000;
+  await app.main();
+  assert.ok(app.html().includes("A 책 1"), "abandoned widget lease expired only after 270 s and the app recovered");
+  assert.equal(app.env.files.has(LEASE), false);
+});
+
+test("lease recovery: a legacy v1.2.8 270 s lease is respected for its full lifetime by app and widget, then recovers", async () => {
+  const start = Date.parse("2026-10-18T03:00:00Z");
+  const legacy = JSON.stringify({ owner: "legacy-1.2.8", expiresAt: start + 270000 });
+  const t = setup({ files: { [LEASE]: legacy } });
+  let now = start + 200000;
+  t.run("clock").now = () => now;
+  await t.run("main")();
+  const html = t.env.log.html.at(-1);
+  assert.match(html, /다른 실행이 조회 중/);
+  assert.equal(lrBusySec(html), 70);
+  assert.match(html, /실행 표시 종류 알 수 없음/, "kind-less legacy lease is reported as unknown");
+  assert.doesNotMatch(html, /모두 조회 실패|조회 오류|로그인 실패/);
+  assert.equal(t.env.files.get(LEASE), legacy);
+  t.env.globals.config.runsInWidget = true;
+  try { await t.run("main")(); } finally { t.env.globals.config.runsInWidget = false; }
+  const w = widgetTexts(t);
+  assert.match(w, /⏳ 조회 보류/);
+  assert.doesNotMatch(w, /조회 실패/);
+  assert.equal(t.env.files.get(LEASE), legacy, "widget does not shorten or replace a legacy live lease");
+  assert.equal(requestsFor(t, "/intro").length, 0);
+  now = start + 270001;
+  await t.run("main")();
+  assert.ok(t.env.log.html.at(-1).includes("A 책 1"));
+  assert.equal(t.env.files.has(LEASE), false);
+});
+
+test("lease contention: app and widget processes sharing the local Library respect the current owner in both directions", async () => {
+  const app = lrPeer({ hold: true });
+  const appRun = app.main();
+  await lrUntil(() => app.state.loanSeen, "app holds the lease");
+  const held = app.env.files.get(LEASE);
+  assert.ok(JSON.parse(held).expiresAt - Date.now() > 200000, "app keeps the existing 270 s lease");
+  const widget = lrPeer({ runsInWidget: true, files: app.env.files });
+  await widget.main();
+  const w = widget.widget();
+  assert.match(w, /⏳ 조회 보류/);
+  assert.match(w, /다른 실행이 조회 중/);
+  assert.doesNotMatch(w, /조회 실패|로그인 실패/);
+  assert.equal(app.env.files.get(LEASE), held);
+  assert.equal(widget.libRequests(), 0);
+  app.open();
+  await appRun;
+  assert.ok(app.html().includes("A 책 1"));
+  assert.equal(app.env.files.has(LEASE), false);
+
+  const w2 = lrPeer({ runsInWidget: true, hold: true });
+  const w2Run = w2.main();
+  await lrUntil(() => w2.state.loanSeen, "widget holds the lease");
+  const wHeld = w2.env.files.get(LEASE);
+  const a2 = lrPeer({ files: w2.env.files });
+  await a2.main();
+  const sec = lrBusySec(a2.html());
+  assert.ok(sec > 200 && sec <= 270, String(sec));
+  assert.match(a2.html(), /실행 표시 종류 위젯/);
+  assert.doesNotMatch(a2.html(), /모두 조회 실패|조회 오류/);
+  assert.equal(w2.env.files.get(LEASE), wHeld);
+  w2.open();
+  await w2Run;
+  assert.match(w2.widget(), /A 책 1/);
+  assert.equal(w2.env.files.has(LEASE), false);
+});
+
+test("lease contention: an immediate app retry during a live app run is told the remaining time and never clears or rewrites the lease", async () => {
+  const first = lrPeer({ hold: true });
+  const firstRun = first.main();
+  await lrUntil(() => first.state.loanSeen, "first app run holds the lease");
+  const held = first.env.files.get(LEASE);
+  const retry = lrPeer({ files: first.env.files });
+  for (let i = 0; i < 2; i++) {
+    await retry.main();
+    const html = retry.html();
+    assert.match(html, /다른 실행이 조회 중/);
+    const sec = lrBusySec(html);
+    assert.ok(sec > 200 && sec <= 270, String(sec));
+    assert.doesNotMatch(html, /모두 조회 실패|조회 오류|로그인 실패/);
+    assert.equal(first.env.files.get(LEASE), held, "retry left the live lease byte-identical");
+  }
+  const skipped = plain(await retry.run("collectData")([A, B]));
+  assert.equal(skipped.length, 2);
+  assert.ok(skipped.every((r) => r.status === "error" && r.skipped === "busy" && r.retryAfterSec > 200 && r.items.length === 0), JSON.stringify(skipped));
+  assert.equal(first.env.files.get(LEASE), held);
+  assert.equal(retry.libRequests(), 0);
+  first.open();
+  await firstRun;
+  assert.ok(first.html().includes("A 책 1"));
+  assert.equal(first.env.files.has(LEASE), false);
+});
+
+test("lease lifecycle: updater early return never acquires a lease; the post-update rerun acquires once and releases", async () => {
+  const lib = makeLibrary(members());
+  let offer = remoteScript("9.9.9");
+  const env = createEnv({ handler: async (req) => (req.url.startsWith(BASE) ? lib.handler(req) : { status: 200, body: offer }), files: { [INSTALLED]: INSTALLED_CODE }, keychain: { SPLIB_ACCOUNTS: JSON.stringify([A, B]) } });
+  const leaseWrites = [];
+  const fm = env.globals.FileManager.local();
+  const write = fm.writeString;
+  fm.writeString = (p, s) => { if (p === LEASE) leaseWrites.push(JSON.parse(s)); return write(p, s); };
+  env.alertScript.push({ choice: 0 }, { choice: 0 });
+  const run = loadScript(TRACKER, env.globals);
+  await run("main")();
+  assert.equal(env.files.get(INSTALLED), offer, "update written");
+  assert.equal(leaseWrites.length, 0, "update path returns before acquiring");
+  assert.equal(env.files.has(LEASE), false);
+  assert.equal(env.log.requests.filter((r) => r.url.startsWith(BASE)).length, 0);
+  offer = remoteScript(run("SCRIPT_VERSION")); // same version as the running script: no update offered
+  await run("main")();
+  assert.equal(leaseWrites.length, 1);
+  assert.equal(env.files.has(LEASE), false, "rerun released its own lease");
+  assert.ok(env.log.html.at(-1).includes("A 책 1"));
+});
+
+test("lease cleanup: normal widget/app runs write the original 270 s lease (with kind) and remove only their own; an exception after takeover leaves the foreign lease", async () => {
+  for (const runsInWidget of [true, false]) {
+    const t = setup({ runsInWidget });
+    const writes = [];
+    const fm = t.env.globals.FileManager.local();
+    const write = fm.writeString;
+    fm.writeString = (p, s) => { if (p === LEASE) writes.push(JSON.parse(s)); return write(p, s); };
+    const before = Date.now();
+    await t.run("main")();
+    assert.equal(writes.length, 1);
+    const ttl = writes[0].expiresAt - before;
+    assert.ok(ttl >= 270000 && ttl <= 271000, `${runsInWidget ? "widget" : "app"} ${ttl}`);
+    assert.equal(writes[0].kind, runsInWidget ? "widget" : "app");
+    assert.equal(writes[0].ttlMs, undefined);
+    assert.equal(t.env.files.has(LEASE), false);
+  }
+  const intruder = JSON.stringify({ owner: "intruder", expiresAt: Date.now() + 60000 });
+  const t = setup();
+  t.env.globals.__lrTakeover = () => t.env.files.set(LEASE, intruder);
+  t.run("fetchAllAccounts = async () => { __lrTakeover(); throw new Error('boom-after-takeover'); }");
+  await assert.rejects(t.run("main")(), /boom-after-takeover/);
+  assert.equal(t.env.files.get(LEASE), intruder, "finally never removes a foreign lease");
+  const own = setup({ runsInWidget: true });
+  own.run("fetchAllAccounts = async () => { throw new Error('boom-own'); }");
+  await assert.rejects(own.run("main")(), /boom-own/);
+  assert.equal(own.env.files.has(LEASE), false, "own lease removed on exception");
+});
+
+// ================================================================ lease pause past the real 270 s expiry (60 s candidate withdrawn)
+// 합성 계정·응답·파일만. 앱·위젯은 독립 VM이고 local Library(파일 Map)와 합성 서버 하나를 공유한다. 키체인은 실행마다 따로 둔다
+// (오래된 실행의 저장 여부를 따로 관측하기 위함). 가상 시계를 함께 쓴다. 실기기 iOS 정지·재개와 실서버 세션 정책은 확인하지 않았다.
+const LS_A = { label: A.label, id: A.id, pw: A.pw };
+const LS_B = { label: B.label, id: B.id, pw: B.pw };
+const lsSidOwner = (lib, req) => lib.sessions.get(/JSESSIONID=([^;]+)/.exec(req.cookie || "")?.[1]);
+const lsLoanOf = (lib, userId) => (req) => req.url === BASE + LOAN_PATH && lsSidOwner(lib, req) === userId;
+function lsPeer({ lib, files, clock, runsInWidget = false, holdWhen = null }) {
+  let open = () => {};
+  const gate = new Promise((r) => { open = r; });
+  const state = { holding: false };
+  const handler = async (req) => {
+    if (holdWhen && !state.holding && holdWhen(req)) { state.holding = true; await gate; }
+    return lib.handler(req);
+  };
+  const env = createEnv({ handler, runsInWidget, keychain: { SPLIB_ACCOUNTS: JSON.stringify([LS_A, LS_B]) } });
+  env.files = files;
+  const run = loadScript(TRACKER, env.globals);
+  run("clock").now = () => clock.t;
+  return {
+    env, run, state, open: () => open(),
+    libReqs: () => env.log.requests.filter((r) => r.url.startsWith(BASE)),
+    widgetText: () => ((env.log.widgets.at(-1) || {}).texts || []).join("\n")
+  };
+}
+
+test("lease pause C1: a widget paused past the real 270 s expiry while an app holds its own lease cannot keep rows, persist bindings or remove the app lease; post-resume requests are an inherited limit", async () => {
+  const T0 = Date.parse("2026-10-18T03:00:00Z");
+  const clock = { t: T0 };
+  const files = new Map();
+  const lib = makeLibrary(members());
+  const widget = lsPeer({ lib, files, clock, runsInWidget: true, holdWhen: lsLoanOf(lib, "alice") });
+  const widgetRun = widget.run("main")();
+  await lrUntil(() => widget.state.holding, "widget request in flight");
+  const wLease = JSON.parse(files.get(LEASE));
+  assert.equal(wLease.expiresAt, T0 + 270000, "widget writes the original 270 s lease");
+  assert.equal(wLease.kind, "widget");
+
+  clock.t = T0 + 269999; // 만료 1 ms 전: 아직 존중
+  const early = lsPeer({ lib, files, clock });
+  const skipped = plain(await early.run("collectData")([LS_A, LS_B]));
+  assert.ok(skipped.every((r) => r.skipped === "busy" && r.retryAfterSec === 1 && r.leaseKind === "widget" && r.items.length === 0), JSON.stringify(skipped));
+  assert.equal(early.libReqs().length, 0);
+  assert.equal(JSON.parse(files.get(LEASE)).owner, wLease.owner);
+
+  clock.t = T0 + 270001; // 실제 만료 뒤
+  const app = lsPeer({ lib, files, clock, holdWhen: lsLoanOf(lib, "bob") });
+  const appRun = app.run("collectData")([LS_A, LS_B]);
+  await lrUntil(() => app.state.holding, "app holds its own lease mid-collection");
+  const appLease = files.get(LEASE);
+  assert.notEqual(JSON.parse(appLease).owner, wLease.owner, "app took over only after expiry");
+  assert.equal(JSON.parse(appLease).kind, "app");
+
+  const before = widget.libReqs().length;
+  const inFlight = widget.libReqs()[before - 1];
+  assert.equal(inFlight.url, BASE + LOAN_PATH);
+  widget.open(); // 앱이 끝나기 전에 위젯 재개
+  await widgetRun;
+  const after = widget.libReqs().slice(before);
+
+  assert.equal(files.get(LEASE), appLease, "stale widget neither removed nor rewrote the app lease");
+  const text = widget.widgetText();
+  assert.match(text, /실행 표시\(잠금\)를 가져가/);
+  assert.doesNotMatch(text, /[AB] 책 \d/);
+  assert.equal(widget.env.keychain.has(VKEY), false, "stale widget persisted no pending binding");
+  assert.ok([...files.keys()].every((p) => !p.includes("songpa-verified-members")));
+
+  // 상속된 한계(보고용): 소유권 확인은 조회가 끝난 뒤 한 번뿐이다. 재개된 위젯은 그 전에 자기 세션으로 요청을 더 보낸다 (취소가 아니라 폐기).
+  // 새 로그인이 없는 것은 예산(deadline) 초과 때문이며 실행 표시 확인 때문이 아니다.
+  assert.ok(after.length > 0, "resumed stale widget made further requests before its final owner check");
+  assert.ok(after.some((r) => r.url === PROFILE_URL), "final profile proof was requested after resume");
+  assert.ok(after.every((r) => !r.url.startsWith(LOGIN)));
+  assert.ok(after.every((r) => r.explicitCookie && r.cookie === inFlight.cookie), "post-resume requests stay pinned to the widget's own session");
+  assert.ok(app.libReqs().every((r) => r.cookie !== inFlight.cookie), "the app never used the widget session");
+
+  app.open();
+  const appResults = plain(await appRun);
+  assert.deepEqual(appResults.map((r) => r.status), ["ok", "ok"]);
+  assert.deepEqual(titles(appResults[0]), ["A 책 1", "A 책 2"]);
+  assert.deepEqual(titles(appResults[1]), ["B 책 1"]);
+  assert.equal(app.env.keychain.has(VKEY), true, "the live owner still enrolls");
+  assert.equal(files.has(LEASE), false);
+
+  // 대조: 아무도 가져가지 않은 만료 표시는 재개 뒤에도 소유자가 같아 결과·저장이 유지된다 (위 차이가 소유권 확인 때문임을 보임)
+  const cClock = { t: T0 };
+  const cFiles = new Map();
+  const cLib = makeLibrary(members());
+  const control = lsPeer({ lib: cLib, files: cFiles, clock: cClock, runsInWidget: true, holdWhen: lsLoanOf(cLib, "alice") });
+  const cRun = control.run("main")();
+  await lrUntil(() => control.state.holding, "control widget paused");
+  cClock.t = T0 + 270001;
+  control.open();
+  await cRun;
+  assert.equal(control.env.keychain.has(VKEY), true);
+  assert.match(control.widgetText(), /A 책 \d/);
+  assert.equal(cFiles.has(LEASE), false);
+});
+
+test("lease pause C2: an app run paused past expiry publishes progress before its single owner check (inherited limit); a wrong-principal synthetic server still shows no foreign rows and the final output is discarded", async () => {
+  const T0 = Date.parse("2026-10-18T03:10:00Z");
+  const clock = { t: T0 };
+  const files = new Map();
+  const mem = members();
+  let last = null;
+  // 잘못된 합성 서버: 쿠키와 무관하게 가장 최근에 로그인한 사용자의 화면을 돌려준다 (실서버 동작이라는 주장이 아님)
+  const lib = makeLibrary(mem, { override: (req, ctx) => {
+    if (ctx.path.endsWith("memberLoginProc.do")) { last = new URLSearchParams(req.body).get("userId"); return null; }
+    if (!ctx.member || !last) return null;
+    const m = mem[last];
+    if (ctx.path === PROFILE_PATH) return { status: 200, body: profileHtml(m, last) };
+    if (ctx.path === "/intro/index.do") return { status: 200, body: indexHtml(m, last) };
+    if (ctx.path === LOAN_PATH) return { status: 200, body: listHtml("loan", m, ctx.page) };
+    if (ctx.path === DOO_PATH) return { status: 200, body: listHtml("doo", m, ctx.page) };
+    return null;
+  } });
+  const old = lsPeer({ lib, files, clock, holdWhen: lsLoanOf(lib, "alice") });
+  const progress = [];
+  const oldRun = old.run("collectData")([LS_A, LS_B], async (snap) => { progress.push({ t: clock.t, results: plain(snap.results) }); });
+  await lrUntil(() => old.state.holding, "old app run paused mid-collection");
+  assert.equal(progress.length, 1, "only the initial empty progress before the pause");
+
+  clock.t = T0 + 270001;
+  const next = lsPeer({ lib, files, clock, holdWhen: lsLoanOf(lib, "bob") });
+  const nextRun = next.run("collectData")([LS_A, LS_B]);
+  await lrUntil(() => next.state.holding, "new app run holds its own lease");
+  const nextLease = files.get(LEASE);
+  assert.equal(JSON.parse(nextLease).kind, "app");
+
+  old.open();
+  const oldResults = plain(await oldRun);
+  const resumed = progress.slice(1);
+  assert.ok(resumed.length >= 1, "progress callbacks ran after resume, before the final owner check (inherited limit)");
+  assert.ok(resumed.every((p) => p.t === T0 + 270001));
+  const a = resumed.at(-1).results[0];
+  assert.equal(a.status, "error");
+  assert.match(a.error, /다른 회원/, "per-page member check rejected the wrong principal");
+  for (const p of progress) for (const r of p.results) assert.equal(r.items.length, 0, "no rows surfaced in stale progress");
+  assert.ok(oldResults.every((r) => r.status === "error" && r.items.length === 0 && /실행 표시\(잠금\)를 가져가/.test(r.error)));
+  assert.equal(files.get(LEASE), nextLease, "stale run left the new lease intact");
+  assert.equal(old.env.keychain.has(VKEY), false);
+
+  next.open();
+  const nextResults = plain(await nextRun);
+  assert.deepEqual(nextResults.map((r) => r.status), ["ok", "ok"]);
+  assert.deepEqual(titles(nextResults[0]), ["A 책 1", "A 책 2"]);
+  assert.deepEqual(titles(nextResults[1]), ["B 책 1"]);
+  assert.equal(files.has(LEASE), false);
+});
+
+test("lease caveat C3: acquisition stays advisory and non-atomic; interleaved concurrent starts can both report held, only the later writer passes the owner check, and release stays owner-aware", () => {
+  const files = new Map();
+  const first = lrPeer({ files });
+  const second = lrPeer({ runsInWidget: true, files });
+  const fm = first.env.globals.FileManager.local();
+  const exists = fm.fileExists;
+  let raced = null;
+  // 첫 실행이 "표시 없음"을 본 직후, 쓰기 전에 둘째 실행이 끼어드는 순서를 흉내 낸다
+  fm.fileExists = (p) => {
+    if (p === LEASE && raced === null) { raced = second.run("acquireLease")(); return false; }
+    return exists(p);
+  };
+  const mine = first.run("acquireLease")();
+  fm.fileExists = exists;
+  assert.equal(raced.status, "held");
+  assert.equal(mine.status, "held", "both starts believe they hold the advisory lease");
+  assert.equal(JSON.parse(files.get(LEASE)).kind, "app");
+  assert.equal(second.run("leaseStillHeld")(raced), false);
+  assert.equal(first.run("leaseStillHeld")(mine), true);
+  const survivor = files.get(LEASE);
+  second.run("releaseLease")(raced);
+  assert.equal(files.get(LEASE), survivor, "the overwritten start cannot remove the survivor's lease");
+  first.run("releaseLease")(mine);
+  assert.equal(files.has(LEASE), false);
 });

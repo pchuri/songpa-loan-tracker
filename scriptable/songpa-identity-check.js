@@ -5,9 +5,9 @@
 // https://github.com/pchuri/songpa-loan-tracker (MIT License)
 // 계정은 songpa-accounts.js로 iOS 키체인에 저장한다. 이 파일에는 계정 정보를 넣지 않는다.
 
-const SCRIPT_VERSION = "1.2.8";
+const SCRIPT_VERSION = "1.2.9";
 const NATIVE_TRACE = false;
-const NATIVE_PROBE_BUILD = "copy-evidence-1";
+const NATIVE_PROBE_BUILD = "single-render-1";
 const UPDATE_URL = "https://raw.githubusercontent.com/pchuri/songpa-loan-tracker/main/scriptable/songpa-loan-tracker.js";
 const KEYCHAIN_KEY = "SPLIB_ACCOUNTS";
 // 자동 업데이트는 이 메인 스크립트만 바꾼다. 계정 설정 스크립트는 사용자가 직접 새 버전으로 교체해야 한다.
@@ -2122,6 +2122,15 @@ function applyVerifiedBindings(entries, results) {
 // ------------------------------------------------------------
 const LEASE_FILE = "songpa-loan-tracker.lease.json";
 
+// 실행 표시(lease) 길이는 앱·위젯·진단 모두 LIMITS.leaseTtlMs(270초) 하나다. 위젯 60초 후보는 철회했다:
+// 일시 정지된 위젯이 만료 뒤 재개되는 경우의 안전성을 실기기로 확인하지 못했다. 만료 전 표시는 지우거나 줄이지 않는다.
+// kind는 진단용 표시 종류(app/widget)만 담는다. 계정·아이디·쿠키·시각 원문은 담지 않는다. kind가 없는 기존 표시는 "unknown".
+const LEASE_KIND_LABELS = Object.freeze({ app: "앱", widget: "위젯", unknown: "알 수 없음" });
+function leaseKindOf(cur) {
+  const k = cur && typeof cur.kind === "string" ? cur.kind : "";
+  return k === "app" || k === "widget" ? k : "unknown";
+}
+
 function acquireLease() {
   try {
     const fm = FileManager.local();
@@ -2135,10 +2144,11 @@ function acquireLease() {
         cur = null; // 깨진 파일은 만료된 것으로 본다
       }
       const live = cur && typeof cur.expiresAt === "number" && cur.expiresAt > now && cur.expiresAt <= now + LIMITS.leaseTtlMs * 2;
-      if (live) return { status: "busy" };
+      // 남은 시간은 표시가 만료될 때까지의 최대 시간일 뿐, 다른 실행이 살아 있다는 증거가 아니다. 표시는 지우거나 덮어쓰지 않는다.
+      if (live) return { status: "busy", remainingMs: cur.expiresAt - now, kind: leaseKindOf(cur) };
     }
     const owner = `${now.toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
-    fm.writeString(path, JSON.stringify({ owner, expiresAt: now + LIMITS.leaseTtlMs }));
+    fm.writeString(path, JSON.stringify({ owner, expiresAt: now + LIMITS.leaseTtlMs, kind: config.runsInWidget ? "widget" : "app" }));
     const check = JSON.parse(fm.readString(path));
     if (!check || check.owner !== owner) return { status: "busy" };
     return { status: "held", owner, path, fm };
@@ -2173,7 +2183,16 @@ function leaseStillHeld(lease) {
 async function collectData(accounts, onProgress = null) {
   const lease = acquireLease();
   if (lease.status === "busy") {
-    return accounts.map(a => errorResult(a, "다른 실행이 조회 중이라 이번에는 건너뛰었습니다. 잠시 후 다시 실행해주세요."));
+    // 조회하지 않은 실행: 인증·조회 실패가 아니다. 남은 시간은 표시 만료까지의 최대 시간 (살아 있는 실행인지는 알 수 없음)
+    const retryAfterSec = Math.max(1, Math.ceil((Number(lease.remainingMs) || 0) / 1000));
+    // 읽기 전용 진단: 표시 종류(app/widget/unknown)와 정수 초만. 살아 있는 실행이라는 증거가 아니다.
+    const leaseKind = leaseKindOf(lease);
+    return accounts.map(a => ({
+      ...errorResult(a, `다른 실행이 조회 중이라 이번에는 건너뛰었습니다. 잠시 후 다시 실행해주세요. (실행 표시 남은 시간 약 ${retryAfterSec}초 · 실행 표시 종류 ${LEASE_KIND_LABELS[leaseKind]} · 멈춘 실행이 남긴 표시일 수도 있습니다)`),
+      skipped: "busy",
+      retryAfterSec,
+      leaseKind
+    }));
   }
   try {
     const staged = await fetchAllAccounts(accounts, config.runsInWidget ? LIMITS.widgetBudgetMs : LIMITS.appBudgetMs, true, onProgress);
@@ -2188,6 +2207,13 @@ async function collectData(accounts, onProgress = null) {
 }
 
 // 전체 상태 요약: 모두 실패 / 일부만 확인 / 모두 확인(0건 포함)
+// 실행 표시 때문에 이번 실행이 아무 계정도 조회하지 않은 경우 (조회 실패·로그인 실패가 아님). 화면 문구 전용.
+function busyRunInfo(data) {
+  const list = Array.isArray(data) ? data : [];
+  if (list.length === 0 || !list.every(d => d && d.status === "error" && d.skipped === "busy")) return null;
+  return { accounts: list.length, sec: Math.max(1, ...list.map(d => (Number.isFinite(d.retryAfterSec) ? d.retryAfterSec : 1))) };
+}
+
 function summarizeResults(data) {
   const s = { total: data.length, ok: 0, partial: 0, error: 0, pending: 0, items: 0, displayItems: 0, shownPartial: 0, loans: 0, pickups: 0, transits: 0, displayLoans: 0, displayPickups: 0, displayTransits: 0 };
   for (const d of data) {
@@ -2244,7 +2270,11 @@ async function createWidget(data, updateInfo) {
   const allCollected = data.length>0 && data.every(d=>d.status!=="error"&&d.loanComplete&&d.dooComplete&&!d.coverageUncertain);
   let badgeStr = `총 ${s.displayItems}건`;
   let badgeColor = gray;
-  if (s.allFailed) {
+  const busyRun = busyRunInfo(data);
+  if (busyRun) {
+    badgeStr = "⏳ 조회 보류";
+    badgeColor = orange;
+  } else if (s.allFailed) {
     badgeStr = "⚠️ 조회 실패";
     badgeColor = red;
   } else if (s.hasShownProblem) {
@@ -2270,7 +2300,7 @@ async function createWidget(data, updateInfo) {
   // 실패·일부 확인 계정을 먼저 보여준다 (계정 이름 전체)
   // 확정된 결과라도 안내(경고)가 있으면 한 줄 보여 준다
   const failed = d => d.status !== "ok" && d.status !== "partial";
-  const problems = data.filter(d => failed(d) || uiPartial(d) || uiWarnings(d).length > 0).map(d => ({
+  const problems = busyRun ? [{ text: `⏳ 다른 실행이 조회 중 · 약 ${busyRun.sec}초 뒤 다시 실행 (${busyRun.accounts}개 계정 이번엔 조회 안 함)`, color: orange }] : data.filter(d => failed(d) || uiPartial(d) || uiWarnings(d).length > 0).map(d => ({
     text: failed(d)
       ? `⚠️ ${d.name}: ${d.error || "조회 실패"}`
       : uiPartial(d)
@@ -2576,6 +2606,9 @@ function buildHtmlPage(data) {
   const recordNote = s.displayItems !== s.items ? ` · 기록 ${s.items}건` : ""; // 화면 항목 수와 기록 수가 다를 때만
   if (s.pending>0) {
     subtitleHtml = `조회 중 · ${data.length-s.pending}/${data.length}계정 완료 · 목록 ${s.displayItems}건${recordNote}`;
+  } else if (busyRunInfo(data)) {
+    const busy = busyRunInfo(data);
+    subtitleHtml = `<span class="subtitle-alert">⏳ 다른 실행이 조회 중이거나 그 실행 표시가 남아 있어 ${busy.accounts}개 계정 모두 이번에는 조회하지 않았습니다 · 약 ${busy.sec}초 뒤 다시 실행해주세요 (이번에는 도서 수를 확인하지 않음)</span>`;
   } else if (s.allFailed) {
     subtitleHtml = `<span class="subtitle-alert">⚠️ ${data.length}개 계정 모두 조회 실패 · 도서 수를 알 수 없습니다</span>`;
   } else if (allCollected && s.hasShownProblem) {
@@ -2613,7 +2646,7 @@ function buildHtmlPage(data) {
       ? summaryEntries.map(([lib, cnt]) => `<span>📍<strong>${escapeHtml(lib)}</strong>: ${Number(cnt)}권</span>`).join("&nbsp;&nbsp;·&nbsp;&nbsp;")
       : (isPartial && !collected ? "확인된 대출 도서관 없음 (일부 목록 미확인)" : "대출 중인 도서관 없음");
 
-    const errHtml = isError ? `<div class="err-box">⚠️ 조회 오류: ${escapeHtml(d.error || "알 수 없는 오류")}</div>` : "";
+    const errHtml = isError ? (d.skipped === "busy" ? `<div class="err-box">⏳ 이번에는 조회하지 않음: ${escapeHtml(d.error || "")}</div>` : `<div class="err-box">⚠️ 조회 오류: ${escapeHtml(d.error || "알 수 없는 오류")}</div>`) : "";
     const warnings = isError ? [] : uiWarnings(d);
     const warnHtml = warnings.length > 0
       ? `<div class="warn-box">${isPartial ? (collected ? "<div><strong>목록 조회 완료 · 아래 항목은 확인 필요</strong></div>" : "<div><strong>일부만 확인된 결과입니다.</strong></div>") : ""}${warnings.map(w => `<div>⚠️ ${escapeHtml(w)}</div>`).join("")}</div>`
@@ -2667,7 +2700,7 @@ function buildHtmlPage(data) {
     }
 
     const statsHtml = isPending ? `<span>${d.pendingActive ? "현재 계정 조회 중" : "순차 조회 중"}</span>` : isError
-      ? `<span style="color:var(--red);">조회 실패 · 도서 정보 없음</span>`
+      ? (d.skipped === "busy" ? `<span style="color:var(--orange);">이번에는 조회하지 않음 · 도서 정보 없음</span>` : `<span style="color:var(--red);">조회 실패 · 도서 정보 없음</span>`)
       : `<span>대출 ${dc.loan}권${d.loanComplete === false ? " (일부 미확인)" : ""}</span>
             ${dc.pickup > 0 ? `<span style="color:var(--yellow); font-weight:800;">· 🔔 픽업필요 ${dc.pickup}권</span>` : ""}
             ${dc.transit > 0 ? `<span style="color:var(--sky);">· 🚚 이동중 ${dc.transit}권</span>` : ""}
@@ -2678,7 +2711,7 @@ function buildHtmlPage(data) {
         <div class="card-header">
           <div class="user-row">
             <span class="user-name">👤 ${escapeHtml(d.name)}</span>
-            <span class="badge-total">${isPending ? "조회 중" : isError ? "조회 실패" : `${groups.length}건${isPartial && !collected ? "+" : ""}${groups.length !== items.length ? ` · 기록 ${items.length}건` : ""}`}</span>
+            <span class="badge-total">${isPending ? "조회 중" : isError ? (d.skipped === "busy" ? "조회 보류" : "조회 실패") : `${groups.length}건${isPartial && !collected ? "+" : ""}${groups.length !== items.length ? ` · 기록 ${items.length}건` : ""}`}</span>
           </div>
           <div class="stats-row">
             ${statsHtml}
@@ -3265,44 +3298,27 @@ async function runMain() {
     return;
   }
 
-  const progressTrace=[];
-  const progressStarted=clock.now();
-  let wv=null,presentation=null,closed=false,progressEnabled=true;
-  if (!config.runsInWidget) {
-    wv=new WebView();
-    nativeRenderStage("INITIAL_LOAD_START");
-    await wv.loadHTML(buildHtmlPage(progressResults(accounts,{results:[],activeIndex:0})));
-    nativeRenderStage("INITIAL_LOAD_DONE");
-    // present의 Promise는 화면을 닫을 때 끝난다. 조회 전에 await하지 않는다.
-    presentation=wv.present(true).then(()=>{closed=true;});
-    nativeRenderStage("PRESENT_CALLED");
-    // 이 Mac의 Scriptable에서 전체 HTML을 표시하는 전환 중 즉시 DOM 교체 시 흰 화면이 재현됐다.
-    // 동일 HTML의 첫 갱신을 1.5초 늦춘 실제 비교는 통과했다. API가 보장하는 준비 신호는 아니다.
-    await new Promise(resolve=>Timer.schedule(1500,false,resolve));
-    nativeRenderStage("PRESENTATION_YIELDED");
-  }
-  const onProgress=wv ? async snapshot=>{
-    if (closed || !progressEnabled || snapshot.results.length===0) return;
-    nativeRenderStage("PROGRESS_"+snapshot.results.length+"_START");
-    const updated=await updateProgressView(wv,progressResults(accounts,snapshot));
-    if (!updated) progressEnabled=false;
-    nativeRenderStage("PROGRESS_"+snapshot.results.length+(updated?"_DONE":"_FAILED"));
-    if (NATIVE_TRACE) progressTrace.push({completed:snapshot.results.length,elapsedMs:clock.now()-progressStarted,updated,viewStillPresented:!closed});
-  } : null;
+  // single-render-1: 앱 실행은 조회와 실행 표시 해제(collectData의 finally)가 모두 끝난 뒤에만 화면을 만든다.
+  // 조회 중에는 WebView를 만들거나 불러오거나 띄우지 않고, 진행 상황 콜백을 넘기지 않으며, DOM을 중간에 바꾸지 않는다.
+  // progressResults·updateProgressView는 보조 함수로 남아 있지만 이 실행 흐름에서는 호출하지 않는다.
+  // 실기기에서 흰 화면이 사라지는지는 이 변경으로 확인된 것이 아니다.
   nativeRenderStage("COLLECT_START");
-  const data=await collectData(accounts,onProgress);
+  const data=await collectData(accounts);
   nativeRenderStage("COLLECT_DONE");
   if (NATIVE_TRACE) try {
     const fm=FileManager.local();
-    fm.writeString(fm.joinPath(fm.libraryDirectory(),"songpa-native-safe-trace.json"),JSON.stringify({build:NATIVE_PROBE_BUILD,progress:progressTrace,accounts:data.map((d,index)=>({index:index+1,status:d.status,loanComplete:d.loanComplete,dooComplete:d.dooComplete,trace:d.nativeTrace||"",identifierEvidence:d.identifierEvidence||{}}))}));
+    fm.writeString(fm.joinPath(fm.libraryDirectory(),"songpa-native-safe-trace.json"),JSON.stringify({build:NATIVE_PROBE_BUILD,progress:[],accounts:data.map((d,index)=>({index:index+1,status:d.status,loanComplete:d.loanComplete,dooComplete:d.dooComplete,trace:d.nativeTrace||"",identifierEvidence:d.identifierEvidence||{}}))}));
   } catch (_) {}
   if (config.runsInWidget) {
     const widget=await createWidget(data,updateInfo);
     widget.url=URLScheme.forRunningScript();Script.setWidget(widget);
   } else {
-    if (!closed && (!progressEnabled || !(await updateProgressView(wv,data,true)))) await wv.loadHTML(buildHtmlPage(data));
+    // 최종 HTML 하나를 WebView 하나에 한 번만 불러와 한 번만 띄운다 (실행 표시는 이미 해제됨).
+    const html=buildHtmlPage(data);
+    const wv=new WebView();
+    await wv.loadHTML(html);
     nativeRenderStage("FINAL_RENDER_DONE");
-    await presentation;
+    await wv.present(true);
   }
 }
 
