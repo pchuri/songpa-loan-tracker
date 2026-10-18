@@ -5,9 +5,9 @@
 // https://github.com/pchuri/songpa-loan-tracker (MIT License)
 // 계정은 songpa-accounts.js로 iOS 키체인에 저장한다. 이 파일에는 계정 정보를 넣지 않는다.
 
-const SCRIPT_VERSION = "1.2.6";
+const SCRIPT_VERSION = "1.2.7";
 const NATIVE_TRACE = false;
-const NATIVE_PROBE_BUILD = "title-display-3";
+const NATIVE_PROBE_BUILD = "return-location-1";
 const UPDATE_URL = "https://raw.githubusercontent.com/pchuri/songpa-loan-tracker/main/scriptable/songpa-loan-tracker.js";
 const KEYCHAIN_KEY = "SPLIB_ACCOUNTS";
 // 자동 업데이트는 이 메인 스크립트만 바꾼다. 계정 설정 스크립트는 사용자가 직접 새 버전으로 교체해야 한다.
@@ -1299,6 +1299,50 @@ function probableDisplayPairs(unjoinedLoans, unjoinedActiveDoos) {
   return pairs;
 }
 
+// 표시 전용 책솔이 반납처 (v1.2.7 return-location-1). 같은 계정·같은 전체 제목(displayTitleKey)의 수령 기록(입수·완료)에서
+// 수령/제공 도서관 쌍이 하나로 확정될 때만 쓴다. 원래 기록·lib·provLib·shortLib·libSummary·개수·경고·연결은 바꾸지 않는다.
+// 소장 도서관으로 반납처를 추정하지 않는다. 같은 실물 책이라는 판단이 아니며 등록번호 연결(joinOf)을 대신하지 않는다.
+const RECEIPT_DOO_STATUSES = ["입수", "완료"];
+function resolveBooksoleLocation(loan, sameTitleLoans, receipts) {
+  if (sameTitleLoans.length !== 1 || receipts.length === 0) return null;
+  if (loan.ambiguousIds || loan.ownerLibAmbiguous) return null;
+  const raw = isPlaceholderLib(loan.rawLib) ? "" : libScope(loan.rawLib);
+  if (!raw) return null;
+  const pairs = new Set();
+  for (const d of receipts) {
+    if (d.ambiguousIds || isPlaceholderLib(d.receiving) || isPlaceholderLib(d.providing)) return null;
+    const recv = libScope(d.receiving);
+    const prov = libScope(d.providing);
+    if (!recv || !prov) return null;
+    if (loan.ids && d.ids && loan.ids.copy && d.ids.copy && loan.ids.copy !== d.ids.copy) return null;
+    if (!displayMetaCompatible(loan.displayMeta, d.displayMeta)) return null;
+    pairs.add(`${recv}>${prov}`);
+  }
+  if (pairs.size !== 1) return null;
+  const first = receipts[0];
+  const recv = libScope(first.receiving);
+  const prov = libScope(first.providing);
+  if (raw !== prov && raw !== recv) return null;
+  if (loan.ownerLib) {
+    const owner = isPlaceholderLib(loan.ownerLib) ? "" : libScope(loan.ownerLib);
+    if (!owner || owner !== prov) return null;
+  }
+  return { receiving: first.receiving, providing: first.providing };
+}
+
+// 연결되지 않은 책솔이 대출 → { receiving, providing } 또는 null(반납처 미확인). 일반·연결된 대출은 넣지 않는다.
+function booksoleDisplayLocations(loans, doos, joinOf, joined) {
+  const out = new Map();
+  const loansByTitle = groupBy(loans, r => displayTitleKey(r.title));
+  const receiptsByTitle = groupBy(doos.filter(d => RECEIPT_DOO_STATUSES.includes(d.status) && !joined.has(d)), d => displayTitleKey(d.title));
+  for (const r of loans) {
+    if (!r.isBooksole || joinOf.has(r)) continue;
+    const key = displayTitleKey(r.title);
+    out.set(r, resolveBooksoleLocation(r, loansByTitle.get(key) || [], receiptsByTitle.get(key) || []));
+  }
+  return out;
+}
+
 // 대출·상호대차 기록을 화면용 목록으로 합친다. 제목만으로는 절대 합치거나 숨기지 않는다.
 // warnings: 참고 안내(결과는 확정). issues: 데이터 품질 문제 → uncertain=true(계정 결과를 "일부만 확인"으로)
 function buildMemberBooks(loanRecords, dooRecords, userName, info) {
@@ -1430,6 +1474,7 @@ function buildMemberBooks(loanRecords, dooRecords, userName, info) {
   let pickupCount = 0;
   let transitCount = 0;
 
+  const displayLocations = booksoleDisplayLocations(loans, doos, joinOf, joined); // 표시 전용 (원래 값은 그대로)
   for (const r of loans) {
     const activeDoo = joinOf.get(r) || null;
     loanTitleLacksCopy.set(r.normTitle, Boolean(loanTitleLacksCopy.get(r.normTitle)) || !r.scoped.copy);
@@ -1461,6 +1506,12 @@ function buildMemberBooks(loanRecords, dooRecords, userName, info) {
       shortDate: `${pad2(r.mm)}.${pad2(r.dd)}`,
       isInter: r.isBooksole || Boolean(activeDoo)
     });
+    if (displayLocations.has(r)) {
+      const loc = displayLocations.get(r);
+      const it = items[items.length - 1];
+      if (loc) Object.assign(it, { displayLocation: "resolved", displayReturnLib: loc.receiving, displayOwnerLib: loc.providing, displayShortLib: abbreviateLibrary(loc.receiving) });
+      else Object.assign(it, { displayLocation: "unknown", displayRawLib: r.rawLib });
+    }
     itemOf.set(r, items[items.length - 1]);
   }
 
@@ -2271,7 +2322,7 @@ async function createWidget(data, updateInfo) {
     badge.font = Font.boldSystemFont(11);
     badge.textColor = tagColor;
 
-    const label = row.addText(`${item.user}: ${group.title} (${[...new Set(view.active.map(r => r.shortLib))].join("/")})`);
+    const label = row.addText(`${item.user}: ${group.title} (${[...new Set(view.active.map(r => displayLoanLocation(r).shortLib))].join("/")})`);
     label.font = Font.systemFont(11);
     label.textColor = themed("#000000", "#FFFFFF");
     label.lineLimit = 1;
@@ -2298,6 +2349,29 @@ async function createWidget(data, updateInfo) {
 function uiWarnings(d) {
   if (d && Array.isArray(d.displayWarnings)) return d.displayWarnings;
   return (d && d.warnings) || [];
+}
+
+// 표시 전용 대출 위치 (v1.2.7 return-location-1). 원래 lib·provLib·shortLib는 읽기만 한다.
+// resolved: 수령도서관=반납처, 제공도서관=소장. unknown: 반납처 미확인 + 대출목록 도서관(원래 값). raw: 기존 표시 그대로.
+function displayLoanLocation(b) {
+  if (!b || b.statusType !== "대출중") return { status: "raw", shortLib: b ? b.shortLib : "", returnLib: b ? b.lib : "", ownerLib: b ? b.provLib : "" };
+  if (b.displayLocation === "resolved") return { status: "resolved", shortLib: b.displayShortLib, returnLib: b.displayReturnLib, ownerLib: b.displayOwnerLib };
+  if (b.displayLocation === "unknown") return { status: "unknown", shortLib: "미확인", rawLib: b.displayRawLib || "" };
+  return { status: "raw", shortLib: b.shortLib, returnLib: b.lib, ownerLib: b.provLib };
+}
+
+// 카드 반납 도서관 요약: 대출 항목의 표시 위치로 새로 센다 (원래 libSummary는 그대로 둔다)
+const UNKNOWN_RETURN_SUMMARY = "반납처 미확인";
+function displayLibSummary(d) {
+  if (!d || !Array.isArray(d.items)) return Object.entries((d && d.libSummary) || {});
+  const out = new Map();
+  for (const b of d.items) {
+    if (!b || b.statusType !== "대출중") continue;
+    const loc = displayLoanLocation(b);
+    const key = loc.status === "unknown" ? UNKNOWN_RETURN_SUMMARY : loc.shortLib;
+    out.set(key, (out.get(key) || 0) + 1);
+  }
+  return [...out];
 }
 
 // 화면에서 "확인 필요"로 보일 부분 결과: 목록 미완료, 실제 누락 가능성, 또는 화면에 보일 안내가 있을 때만.
@@ -2435,7 +2509,14 @@ function recordView(b) {
   }
   let libDisplay;
   let subLocText;
-  if (b.isInter) {
+  const loc = displayLoanLocation(b);
+  if (loc.status === "unknown") {
+    libDisplay = `<div class="lib-main">${escapeHtml(loc.shortLib)}</div><div class="lib-sub">반납처</div>`;
+    subLocText = `<div class="loc-detail"><span class="tag-booksole">책솔이</span> 📍반납처 미확인${loc.rawLib ? ` <span class="prov-text">(대출목록 도서관: ${escapeHtml(loc.rawLib)})</span>` : ""}</div>`;
+  } else if (loc.status === "resolved") {
+    libDisplay = `<div class="lib-main inter-highlight">${escapeHtml(loc.shortLib)}</div><div class="lib-sub">수령/반납</div>`;
+    subLocText = `<div class="loc-detail"><span class="tag-booksole">책솔이</span> 📍반납처: <strong>${escapeHtml(loc.returnLib)}</strong> <span class="prov-text">(소장: ${escapeHtml(loc.ownerLib)})</span></div>`;
+  } else if (b.isInter) {
     libDisplay = `<div class="lib-main inter-highlight">${escapeHtml(b.shortLib)}</div><div class="lib-sub">수령/반납</div>`;
     subLocText = `<div class="loc-detail"><span class="tag-booksole">책솔이</span> 📍반납처: <strong>${escapeHtml(b.lib)}</strong> <span class="prov-text">(소장: ${escapeHtml(b.provLib)})</span></div>`;
   } else {
@@ -2491,7 +2572,7 @@ function buildHtmlPage(data) {
     const dc = displayStatusCounts(items); // 카드 통계: 화면 항목 대표 상태 기준 (원시 loanCount 등은 그대로)
 
     // 반납/수령할 도서관 기준 요약 라인
-    const summaryEntries = Object.entries(d.libSummary || {});
+    const summaryEntries = displayLibSummary(d); // 표시 위치 기준 (원래 libSummary는 그대로)
     const summaryHtml = summaryEntries.length > 0
       ? summaryEntries.map(([lib, cnt]) => `<span>📍<strong>${escapeHtml(lib)}</strong>: ${Number(cnt)}권</span>`).join("&nbsp;&nbsp;·&nbsp;&nbsp;")
       : (isPartial && !collected ? "확인된 대출 도서관 없음 (일부 목록 미확인)" : "대출 중인 도서관 없음");
@@ -2532,7 +2613,7 @@ function buildHtmlPage(data) {
         const view = displayGroupView(g); // 대출 먼저, 지난 도착 상호대차는 접힌 중립 기록으로 (원래 기록은 그대로)
         const blocks = view.active.map(b => {
           const v = recordView(b);
-          return `<div class="rec-block"><div class="rec-head">${v.inlineStatus} <span class="rec-lib">${escapeHtml(b.shortLib)}</span></div>${v.subLocText}${v.notesHtml}</div>`;
+          return `<div class="rec-block"><div class="rec-head">${v.inlineStatus} <span class="rec-lib">${escapeHtml(displayLoanLocation(b).shortLib)}</span></div>${v.subLocText}${v.notesHtml}</div>`;
         }).join("");
         const historyHtml = view.history.length === 0 ? ""
           : `<details class="rec-history-box"><summary>이전 상호대차 기록 ${view.history.length}건</summary>${view.history.map(historyRecordView).join("")}</details>`;

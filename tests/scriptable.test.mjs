@@ -3449,8 +3449,8 @@ test("display group: placeholder owning/providing library strings are unknown, n
 
 test("v1.2.6 title-display-1: display totals say 건; progressive guards preserved", async () => {
   const run = loadScript(TRACKER, createEnv().globals);
-  assert.equal(run("SCRIPT_VERSION"), "1.2.6");
-  assert.equal(run("NATIVE_PROBE_BUILD"), "title-display-3");
+  assert.equal(run("SCRIPT_VERSION"), "1.2.7");
+  assert.equal(run("NATIVE_PROBE_BUILD"), "return-location-1");
   assert.equal(run("NATIVE_TRACE"), false);
   const t = setup();
   const html = t.run("buildHtmlPage")(await t.fetchAll());
@@ -3807,4 +3807,201 @@ test("title-display-3 helper: displayGroupView puts loans first (nearest due fir
   assert.equal(lone.primary, p);
   assert.deepEqual(Array.from(lone.active, (x) => x.statusType), ["픽업필요"]);
   assert.equal(lone.history.length, 0);
+});
+
+// ================================================================ v1.2.7 return-location-1 책솔이 표시 전용 반납처 (가상 도서관·제목만)
+const RL_OWN = "가상소장관";
+const RL_RECV = "가상스마트수령관";
+const RL_TITLE = "가상 반납처 책";
+const rlLoan = (o = {}) => loanRow({ title: RL_TITLE, lib: RL_OWN, booksole: true, due: "2099.10.15", ...o });
+const rlIll = (o = {}) => dooRow({ title: RL_TITLE, status: "완료", providing: RL_OWN, receiving: RL_RECV, ...o });
+const rlRawIll = (status, inner, title = RL_TITLE) => `<div class="myArticle-list"><div class="title">${title}</div>${inner}<div class="statusBox">${status}</div></div>`;
+const rlLoanItems = (r) => r.items.filter((i) => i.statusType === "대출중");
+const rlSummary = (html) => (html.match(/<div class="lib-summary">([\s\S]*?)<\/div>/) || [null, ""])[1];
+const rlWidget = async (run, data) => (await run("createWidget")(data, null)).texts;
+function rlBuild(loanHtml, dooHtml) {
+  const run = loadScript(TRACKER, createEnv().globals);
+  const ls = loanHtml.map((h) => run("parseLoanRow")(h));
+  const ds = dooHtml.map((h) => run("parseDooraeRow")(h));
+  const before = JSON.stringify([ls, ds]);
+  const r = plain(run("buildMemberBooks")(ls, ds, "u", { loanPages: 1, dooPages: 1 }));
+  assert.equal(JSON.stringify([ls, ds]), before, "raw parse records are not mutated");
+  const d = { ...r, name: "u", status: r.uncertain ? "partial" : "ok", loanComplete: true, dooComplete: true, displayWarnings: r.displayIssues };
+  return { run, r, d };
+}
+
+test("return-location: booksole loan + unique same-full-title receipt (입수 and 완료, no copy IDs) shows receiving as return and providing as owner; raw fields/counts unchanged", async () => {
+  for (const status of ["입수", "완료"]) {
+    const { run, r, d } = rlBuild([rlLoan()], [rlIll({ status })]);
+    assert.equal(r.loanCount, 1, status);
+    assert.equal(r.pickupCount, status === "입수" ? 1 : 0, `${status}: raw pickup counter unchanged`);
+    assert.equal(r.transitCount, 0, status);
+    assert.equal(r.items.length, status === "입수" ? 2 : 1, `${status}: completed ILL never becomes an item`);
+    assert.deepEqual(r.libSummary, { [RL_OWN]: 1 }, `${status}: raw libSummary unchanged`);
+    const [loan] = rlLoanItems(r);
+    assert.equal(loan.lib, RL_OWN, status);
+    assert.equal(loan.provLib, RL_OWN, status);
+    assert.equal(loan.shortLib, RL_OWN, status);
+    assert.equal(loan.isInter, true, status);
+    assert.equal(loan.dueDate, "2099.10.15", status);
+    assert.equal(loan.displayLocation, "resolved", status);
+    assert.equal(loan.displayReturnLib, RL_RECV, status);
+    assert.equal(loan.displayOwnerLib, RL_OWN, status);
+    assert.notEqual(loan.displayReturnLib, loan.displayOwnerLib, status);
+    const html = run("buildHtmlPage")([d]);
+    const body = tbodyOf(html);
+    assert.ok(body.includes(`📍반납처: <strong>${RL_RECV}</strong> <span class="prov-text">(소장: ${RL_OWN})</span>`), status);
+    assert.ok(!body.includes(`반납처: <strong>${RL_OWN}</strong>`), `${status}: owning library is not shown as return`);
+    assert.doesNotMatch(body, TD3_PICKUP_ACTION, `${status}: no pickup action`);
+    assert.doesNotMatch(html, /class="warn-box"/, status);
+    const summary = rlSummary(html);
+    assert.ok(summary.includes("📍<strong>스마트</strong>: 1권"), `${status}: ${summary}`);
+    assert.ok(!summary.includes(RL_OWN), status);
+    const texts = await rlWidget(run, [d]);
+    assert.ok(texts.some((x) => x.includes(`${RL_TITLE} (스마트)`)), status);
+    assert.ok(texts.every((x) => !x.includes(`(${RL_OWN})`) && !x.includes("픽업")), status);
+    const s = plain(run("summarizeResults")([d]));
+    assert.deepEqual([s.displayItems, s.displayLoans, s.displayPickups, s.displayTransits], [1, 1, 0, 0], status);
+  }
+});
+
+test("return-location: repeated identical pair, equal explicit copy ID, and raw library already equal to receiving still resolve", () => {
+  const cases = {
+    "same pair repeated": [[rlLoan()], [rlIll(), rlIll({ status: "입수" })], RL_RECV],
+    "equal explicit copy IDs": [[rlLoan({ regNo: "COPYA01" })], [rlIll({ regNo: "COPYA01" })], RL_RECV],
+    "raw library already the receiving library": [[rlLoan({ lib: RL_RECV })], [rlIll()], RL_RECV]
+  };
+  for (const [name, [ls, ds, ret]] of Object.entries(cases)) {
+    const { r } = rlBuild(ls, ds);
+    const [loan] = rlLoanItems(r);
+    assert.equal(loan.displayLocation, "resolved", name);
+    assert.equal(loan.displayReturnLib, ret, name);
+    assert.equal(loan.displayOwnerLib, RL_OWN, name);
+  }
+});
+
+test("return-location: missing/conflicting/ignored-status evidence shows neutral 반납처 미확인 with the raw library labelled, never owner-as-return", async () => {
+  const cases = {
+    "no receipt evidence": [[rlLoan()], [], RL_OWN],
+    "missing receiving library": [[rlLoan()], [rlRawIll("완료", `<p><span class="tit">제공도서관 : </span>${RL_OWN}</p>`)], RL_OWN],
+    "missing providing library": [[rlLoan()], [rlRawIll("완료", `<p><span class="tit">수령도서관 : </span>${RL_RECV}</p>`)], RL_OWN],
+    "placeholder receiving library": [[rlLoan()], [rlIll({ receiving: "미확인" })], RL_OWN],
+    "conflicting receiving/provider pairs": [[rlLoan()], [rlIll(), rlIll({ receiving: "가상다른수령관" })], RL_OWN],
+    "conflicting raw loan library": [[rlLoan({ lib: "가상무관관" })], [rlIll()], "가상무관관"],
+    "cancelled/returning/in-transit/request/unknown statuses only": [[rlLoan()], ["신청취소", "복귀중", "발송", "요청중", "보류"].map((status) => rlIll({ status })), RL_OWN]
+  };
+  for (const [name, [ls, ds, raw]] of Object.entries(cases)) {
+    const { run, r, d } = rlBuild(ls, ds);
+    assert.equal(r.loanCount, 1, name);
+    const [loan] = rlLoanItems(r);
+    assert.equal(loan.displayLocation, "unknown", name);
+    assert.equal(loan.displayReturnLib, undefined, name);
+    assert.equal(loan.displayOwnerLib, undefined, name);
+    assert.equal(loan.lib, raw, `${name}: raw lib unchanged`);
+    assert.equal(loan.provLib, raw, `${name}: raw provLib unchanged`);
+    const html = run("buildHtmlPage")([d]);
+    const body = tbodyOf(html);
+    assert.ok(body.includes("반납처 미확인"), name);
+    assert.ok(body.includes(`대출목록 도서관: ${raw}`), name);
+    assert.ok(!body.includes("반납처: <strong>"), `${name}: no confirmed return`);
+    assert.ok(!body.includes(`(소장: ${raw})`), `${name}: raw value not shown as owner`);
+    assert.doesNotMatch(body, /badge-pickup|tag-pickup|pickup-highlight/, name);
+    const summary = rlSummary(html);
+    assert.ok(summary.includes("📍<strong>반납처 미확인</strong>: 1권"), `${name}: ${summary}`);
+    assert.ok(!summary.includes(raw), name);
+    const texts = await rlWidget(run, [d]);
+    assert.ok(texts.some((x) => x.includes(`${RL_TITLE} (미확인`)), name);
+    assert.ok(texts.every((x) => !x.includes(raw)), name);
+  }
+});
+
+test("return-location: duplicate loans, explicit copy mismatch, title-volume/subtitle mismatch, ambiguous IDs and normal loans never borrow a historical location", () => {
+  const dup = rlBuild([rlLoan(), rlLoan({ due: "2099.11.20" })], [rlIll()]);
+  assert.equal(dup.r.loanCount, 2);
+  for (const loan of rlLoanItems(dup.r)) {
+    assert.equal(loan.displayLocation, "unknown");
+    assert.equal(loan.displayReturnLib, undefined);
+  }
+  const ambiguousIll = rlRawIll("완료", `<input type="hidden" name="illKey" value="RLI1"><input type="hidden" name="illKey" value="RLI2">` +
+    `<p><span class="tit">제공도서관 : </span>${RL_OWN}</p><p><span class="tit">수령도서관 : </span>${RL_RECV}</p>`);
+  const cases = {
+    "explicit copy mismatch": [[rlLoan({ regNo: "COPYA01" })], [rlIll({ regNo: "COPYB02" })]],
+    "title volume mismatch": [[rlLoan({ title: "가상 권 책 1" })], [rlIll({ title: "가상 권 책 2" })]],
+    "subtitle is not stripped": [[rlLoan({ title: "가상 책: 부제" })], [rlIll({ title: "가상 책" })]],
+    "ambiguous ILL IDs": [[rlLoan()], [ambiguousIll]]
+  };
+  for (const [name, [ls, ds]] of Object.entries(cases)) {
+    const [loan] = rlLoanItems(rlBuild(ls, ds).r);
+    assert.equal(loan.displayLocation, "unknown", name);
+    assert.equal(loan.displayReturnLib, undefined, name);
+    assert.equal(loan.lib, RL_OWN, name);
+  }
+  const normal = rlBuild([loanRow({ title: RL_TITLE, lib: RL_OWN, due: "2099.10.15" })], [rlIll()]);
+  const [n] = rlLoanItems(normal.r);
+  assert.equal(n.isInter, false, "normal loan is not marked booksole");
+  assert.equal(n.displayLocation, undefined);
+  assert.equal(n.lib, RL_OWN);
+  const html = normal.run("buildHtmlPage")([normal.d]);
+  const body = tbodyOf(html);
+  assert.ok(body.includes(`📍반납처: ${RL_OWN}</div>`));
+  assert.ok(!body.includes("책솔이") && !body.includes("반납처 미확인") && !body.includes(RL_RECV));
+  assert.ok(rlSummary(html).includes(`📍<strong>${RL_OWN}</strong>: 1권`));
+});
+
+test("return-location: exact-ID join stays authoritative and unchanged even with conflicting same-title receipt history", () => {
+  const { run, r, d } = rlBuild(
+    [loanRow({ title: RL_TITLE, lib: RL_OWN, loanKey: "RLJ1", regNo: "COPYJ01" })],
+    [dooRow({ title: RL_TITLE, status: "발송", illKey: "RLJI1", regNo: "COPYJ01", providing: RL_OWN, receiving: "가상조인수령관" }), rlIll()]
+  );
+  assert.equal(r.items.length, 1);
+  const [loan] = rlLoanItems(r);
+  assert.equal(loan.lib, "가상조인수령관");
+  assert.equal(loan.provLib, RL_OWN);
+  assert.equal(loan.isInter, true);
+  assert.equal(loan.displayLocation, undefined);
+  const body = tbodyOf(run("buildHtmlPage")([d]));
+  assert.ok(body.includes("반납처: <strong>가상조인수령관</strong>"));
+  assert.ok(!body.includes(RL_RECV));
+});
+
+test("return-location: another account's receipt never influences a booksole loan; same-account full flow resolves", async () => {
+  const other = setup({ mem: members({
+    alice: { loans: [{ title: RL_TITLE, lib: RL_OWN, booksole: true, due: "2099.10.15" }], doo: [] },
+    bob: { loans: [], doo: [{ title: RL_TITLE, status: "완료", providing: RL_OWN, receiving: RL_RECV }] }
+  }) });
+  const data = await other.fetchAll();
+  const [a, b] = data;
+  assert.equal(a.items.length, 1);
+  assert.equal(a.items[0].displayLocation, "unknown");
+  assert.equal(a.items[0].lib, RL_OWN);
+  assert.equal(b.items.length, 0);
+  assert.equal(b.pickupCount, 0);
+  const html = other.run("buildHtmlPage")(data);
+  assert.ok(html.includes("반납처 미확인"));
+  assert.ok(!html.includes(RL_RECV));
+
+  const same = setup({ accounts: [A], mem: members({ alice: {
+    loans: [{ title: RL_TITLE, lib: RL_OWN, booksole: true, due: "2099.10.15" }],
+    doo: [{ title: RL_TITLE, status: "완료", providing: RL_OWN, receiving: RL_RECV }]
+  } }) });
+  const [s] = await same.fetchAll();
+  assert.equal(s.items.length, 1);
+  assert.equal(s.loanCount, 1);
+  assert.equal(s.pickupCount, 0);
+  assert.equal(s.items[0].displayReturnLib, RL_RECV);
+  assert.equal(s.items[0].lib, RL_OWN);
+  assert.deepEqual(s.libSummary, { [RL_OWN]: 1 });
+  const shtml = same.run("buildHtmlPage")([s]);
+  assert.ok(tbodyOf(shtml).includes(`📍반납처: <strong>${RL_RECV}</strong>`));
+  const texts = (await same.run("createWidget")([s], null)).texts;
+  assert.ok(texts.some((x) => x.includes(`${RL_TITLE} (스마트)`)));
+});
+
+test("return-location-1 release constants: version strictly newer than published 1.2.6, trace off", () => {
+  const run = loadScript(TRACKER, createEnv().globals);
+  assert.equal(run("SCRIPT_VERSION"), "1.2.7");
+  assert.equal(run("NATIVE_PROBE_BUILD"), "return-location-1");
+  assert.equal(run("NATIVE_TRACE"), false);
+  assert.equal(run("isNewerVersion")(run("SCRIPT_VERSION"), "1.2.6"), true);
+  assert.equal(run("isNewerVersion")("1.2.6", run("SCRIPT_VERSION")), false);
 });
