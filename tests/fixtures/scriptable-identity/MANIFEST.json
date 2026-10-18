@@ -1,0 +1,23 @@
+{
+  "scope": "Minimal synthetic fixtures based only on observed field/element shapes; not full live HTML. All identity values are invented. The profile field/form nesting is illustrative unless separately recorded.",
+  "logged_in_home": {
+    "form_name": "ebookForm",
+    "action_origin": "https://ebook.splib.or.kr",
+    "action_path": "/login_sso.asp",
+    "input_names": [
+      "id",
+      "name"
+    ],
+    "member_selector": "div.barcodeInfo > span",
+    "member_container_shape": "optional leading plain display-name text, then exactly one direct span (member number), then whitespace only; leading text is display name only, never identity"
+  },
+  "profile_gate": {
+    "path": "/intro/menu/10101/program/30045/memberModifyPwCheck.do",
+    "id_selector": "input[type=hidden]#userId[name=userId]",
+    "password_input_exists": true,
+    "password_not_read_or_submitted": true,
+    "same_response_member_selector": "div.barcodeInfo > span",
+    "fixture": "profile-password-check.html",
+    "fixture_note": "Invented values only. One hidden userId input, one barcodeInfo and one password input, with no form wrapper because form containment was not observed."
+  }
+}
