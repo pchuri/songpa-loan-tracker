@@ -1369,7 +1369,8 @@ test("setup: adding a trusted member ID to a legacy account keeps password/label
 });
 
 test("update alert flags the manual songpa-accounts.js migration for v1.2", async () => {
-  const env = createEnv({ handler: async () => ({ body: 'const SCRIPT_VERSION = "1.3.0";' }) });
+  // 업데이트는 완전한 스크립트(끝 진입점 포함)만 인정하므로 버전만 바꾼 전체 스크립트를 내려준다
+  const env = createEnv({ handler: async () => ({ body: readFileSync(TRACKER, "utf8").replace(/const SCRIPT_VERSION = "[^"]+";/, 'const SCRIPT_VERSION = "1.3.0";') }) });
   const run = loadScript(TRACKER, env.globals);
   await run("checkUpdateIfNeeded")();
   assert.match(env.log.alerts[0].message, /songpa-accounts\.js/);
@@ -4004,4 +4005,439 @@ test("return-location-1 release constants: version strictly newer than published
   assert.equal(run("NATIVE_TRACE"), false);
   assert.equal(run("isNewerVersion")(run("SCRIPT_VERSION"), "1.2.6"), true);
   assert.equal(run("isNewerVersion")("1.2.6", run("SCRIPT_VERSION")), false);
+});
+
+
+// ================================================================ v1.2.7 이후 회귀 보강 (가상 계정·도서·응답만)
+// 실제 이름·아이디·회원번호·도서명·원본 HTML은 쓰지 않는다. 합성 서버 결과는 실서비스 검증을 대신하지 않는다.
+const C = { label: "가상 셋째", id: "carol", pw: "pw-carol-3", memberId: "33330003" };
+const COMMON = "가상 공통 제목 책";
+function threeMembers(over = {}) {
+  const base = members({
+    alice: { loans: [{ title: COMMON, loanKey: "A-LC", regNo: "AR-C", lib: OWN_M, due: "2099.01.11" }, ...books("A", 1)], ...(over.alice || {}) },
+    bob: { loans: [{ title: COMMON, loanKey: "B-LC", regNo: "BR-C", lib: OWN_W, due: "2099.02.22" }, ...books("B", 1)], ...(over.bob || {}) }
+  });
+  return { ...base, carol: { pw: C.pw, memberId: "33330003", name: "가상셋", loans: [{ title: COMMON, loanKey: "C-LC", regNo: "CR-C", lib: OWN_G, due: "2099.03.30" }], doo: [], ...(over.carol || {}) } };
+}
+const OWN_DUE = { alice: "2099.01.11", bob: "2099.02.22", carol: "2099.03.30" };
+const OWN_LIB = { alice: OWN_M, bob: OWN_W, carol: OWN_G };
+const ACC_BY_ID = { alice: A, bob: B, carol: C };
+function assertOwnRows(result, id) {
+  assert.equal(result.name, ACC_BY_ID[id].label, `${id}: result slot belongs to the account`);
+  const other = Object.keys(ACC_BY_ID).filter((x) => x !== id).map((x) => x[0].toUpperCase());
+  for (const it of result.items) {
+    assert.equal(it.user, ACC_BY_ID[id].label, `${id}: item user`);
+    for (const p of other) assert.ok(!it.title.startsWith(`${p} 책`), `${id}: foreign title ${it.title}`);
+  }
+  const common = result.items.filter((i) => i.title === COMMON);
+  assert.equal(common.length, 1, `${id}: exactly one own copy of the shared title`);
+  assert.equal(common[0].dueDate, OWN_DUE[id], `${id}: own due date, never another account's`);
+  assert.equal(common[0].lib, OWN_LIB[id], `${id}: own library`);
+}
+
+test("isolation: same title in three accounts, any order and a rerun in the same app session keep each account's own rows and cookies", async () => {
+  for (const order of [[A, B, C], [C, A, B], [B, C, A]]) {
+    const t = setup({ mem: threeMembers(), accounts: order });
+    for (let run = 1; run <= 2; run++) {
+      const data = await t.fetchAll(order);
+      assert.deepEqual(data.map((d) => d.name), order.map((a) => a.label), `run ${run}: result order follows the account order`);
+      data.forEach((d, i) => {
+        assert.equal(d.status, "ok", `${order[i].id} run ${run}`);
+        assertOwnRows(d, order[i].id);
+      });
+    }
+    assertCookiePinned(t);
+    assert.equal(t.lib.issued.length, 6, "every account logs in afresh on each run (no reused session across runs)");
+    assert.equal(new Set(t.lib.issued).size, 6);
+  }
+});
+
+test("isolation: a failing account (bad password, expired session, network, stale foreign page) never blanks, overwrites or halts the others", async () => {
+  const variants = {
+    "bad password": { mem: threeMembers({ alice: { pw: "changed-on-server" } }) },
+    "expired session on the loan list": { opts: { override: async (req, ctx) => (ctx.userId === "alice" && ctx.path === LOAN_PATH ? { status: 302, location: "/intro/memberLogin.do" } : null) } },
+    "network failure on the ILL list": { partial: true, opts: { override: async (req, ctx) => (ctx.userId === "alice" && ctx.path === DOO_PATH ? { throw: "offline (synthetic)" } : null) } },
+    // 오래된(다른 계정의) 응답: A 세션에 B의 대출 목록 페이지가 돌아온다
+    "stale foreign list page": { opts: { override: async (req, ctx, lib) => (ctx.userId === "alice" && ctx.path === LOAN_PATH ? { status: 200, body: listHtml("loan", lib.members.bob, ctx.page) } : null) } }
+  };
+  for (const [name, v] of Object.entries(variants)) {
+    for (const order of [[A, B, C], [B, A, C], [B, C, A]]) {
+      const t = setup({ mem: v.mem || threeMembers(), accounts: order, opts: v.opts || {} });
+      const data = await t.fetchAll(order);
+      const byId = Object.fromEntries(order.map((a, i) => [a.id, data[i]]));
+      const a = byId.alice;
+      if (v.partial) {
+        // 검증된 대출 목록은 남기고 상호대차 실패는 "일부만 확인"으로 보인다 (오류를 0건으로 보지 않음)
+        assert.equal(a.status, "partial", `${name}: verified loans kept, failed list visible as partial`);
+        assert.equal(a.dooComplete, false);
+        assert.equal(t.run("uiPartial")(a), true);
+        assert.equal(a.items.filter((i) => i.title === COMMON)[0].dueDate, OWN_DUE.alice, `${name}: only own verified rows`);
+        assert.ok(a.items.every((i) => !/^[BC] 책/.test(i.title)));
+      } else {
+        assert.equal(a.status, "error", `${name}: failed account is an error, never ok`);
+        assert.equal(a.items.length, 0, `${name}: failed account shows no rows`);
+        assert.equal(a.loanCount, 0);
+        assert.ok(a.error, `${name}: error message kept`);
+      }
+      for (const id of ["bob", "carol"]) {
+        assert.equal(byId[id].status, "ok", `${name} / ${order.map((a) => a.id)}: ${id} still succeeds`);
+        assertOwnRows(byId[id], id);
+      }
+      assert.equal(t.env.log.requests.filter((r) => r.url.startsWith(LOGIN)).length, 3, `${name}: every account was attempted`);
+      const s = plain(t.run("summarizeResults")(data));
+      assert.equal(s.confirmedZero, false, `${name}: an error is never a confirmed zero`);
+      assert.equal(s.error + s.shownPartial, 1, `${name}: exactly the failed account is flagged`);
+      const texts = await titleWidgetTexts(t, data);
+      assert.ok(texts.some((x) => x.startsWith(`⚠️ ${A.label}:`)), `${name}: widget names the failed account`);
+      assert.ok(!texts.some((x) => x.includes("현재 이용 중인 도서가 없습니다")));
+    }
+  }
+});
+
+// ---------------------------------------------------------------- 픽업 안내 정확성
+test("pickup: an arrived ILL whose registration number differs from the loan's in the same library is a different copy and stays an actionable pickup", async () => {
+  const t = setup({ mem: members({ alice: { loans: [{ title: "가상 복본 책", loanKey: "L1", regNo: "EM001", lib: OWN_M }], doo: [{ title: "가상 복본 책", status: "입수", regNo: "EM002", illKey: "I1", providing: OWN_M, receiving: OWN_G }] } }), accounts: [A] });
+  const [d] = await t.fetchAll();
+  assert.deepEqual(d.items.map((i) => i.statusType).sort(), ["대출중", "픽업필요"]);
+  assert.equal(d.pickupCount, 1);
+  const s = plain(t.run("summarizeResults")([d]));
+  assert.deepEqual([s.displayItems, s.displayLoans, s.displayPickups], [2, 1, 1], "two displayed items: the loan and the separate pickup");
+  const body = tbodyOf(t.run("buildHtmlPage")([d]));
+  assert.equal(body.split("badge-status badge-pickup").length - 1, 1, "pickup action shown");
+  assert.match(body, /tag-pickup/);
+  assert.doesNotMatch(body, /rec-history/, "a different copy is not filed as past history");
+  const texts = await titleWidgetTexts(t, [d]);
+  assert.ok(texts.includes("[픽업필요] "), "widget announces the pickup");
+  assert.ok(texts.some((x) => x.startsWith("🔔 픽업 1")), "widget header counts the pickup");
+});
+
+test("pickup: different-copy separation keeps every record exactly once and only applies when every same-title loan has a comparable copy ID", () => {
+  const run = loadScript(TRACKER, createEnv().globals);
+  // 다른 복본 도착 + 식별번호 없는 같은 제목 이동중: 이동중은 대출과 묶이고, 다른 복본 도착은 따로 남는다
+  const r = groupBuild([loanRow({ title: "가상 복본 책", lib: OWN_M, loanKey: "L1", regNo: "EM001" })], [
+    dooRow({ title: "가상 복본 책", status: "입수", illKey: "I1", regNo: "EM002", providing: OWN_M, receiving: OWN_G }),
+    dooRow({ title: "가상 복본 책", status: "발송", illKey: "I2", providing: OWN_W, receiving: OWN_G })
+  ]);
+  const groups = plain(run("displayTitleGroups")(r.items));
+  assert.equal(groups.length, 2);
+  assert.equal(groups.flatMap((g) => g.records).length, r.items.length, "every record exactly once");
+  const lone = groups.find((g) => g.records.length === 1);
+  assert.deepEqual(lone.records.map((x) => x.statusType), ["픽업필요"]);
+  assert.deepEqual(groups.find((g) => g !== lone).records.map((x) => x.statusType).sort(), ["대출중", "이동중"]);
+  // 같은 제목 대출 둘 중 하나가 등록번호 없음 / 다른 도서관이면 비교할 수 없으므로 기존처럼 묶는다
+  for (const second of [loanRow({ title: "가상 복본 책", lib: OWN_M, loanKey: "L2" }), loanRow({ title: "가상 복본 책", lib: OWN_W, loanKey: "L3", regNo: "EM009" })]) {
+    const m = groupBuild([loanRow({ title: "가상 복본 책", lib: OWN_M, loanKey: "L1", regNo: "EM001" }), second], [
+      dooRow({ title: "가상 복본 책", status: "입수", illKey: "I1", regNo: "EM002", providing: OWN_M, receiving: OWN_G })
+    ]);
+    const g = plain(run("displayTitleGroups")(m.items));
+    assert.equal(g.length, 1, "not comparable with every loan → title grouping kept");
+    assert.equal(g[0].records.length, m.items.length);
+  }
+});
+
+test("pickup: same-library loan and arrived ILL without comparable registration numbers keep the v1.2.6 loan-first display (no duplicate pickup)", async () => {
+  for (const [loanReg, illReg, illProv] of [[undefined, undefined, OWN_M], ["EM001", undefined, OWN_M], [undefined, "EM002", OWN_M], ["EM001", "EM002", OWN_W]]) {
+    const t = setup({ mem: members({ alice: { loans: [{ title: "가상 지난 도착 책", loanKey: "L1", regNo: loanReg, lib: OWN_M }], doo: [{ title: "가상 지난 도착 책", status: "입수", regNo: illReg, illKey: "I1", providing: illProv, receiving: OWN_G }] } }), accounts: [A] });
+    const [d] = await t.fetchAll();
+    const tag = `${loanReg}/${illReg}/${illProv}`;
+    assert.equal(d.pickupCount, 1, `${tag}: raw pickup record kept`);
+    const s = plain(t.run("summarizeResults")([d]));
+    assert.deepEqual([s.displayItems, s.displayLoans, s.displayPickups], [1, 1, 0], tag);
+    const body = tbodyOf(t.run("buildHtmlPage")([d]));
+    assert.doesNotMatch(body, /badge-status badge-pickup|tag-pickup/, `${tag}: no pickup action`);
+    assert.match(body, /rec-history/, `${tag}: arrival kept as collapsed history`);
+    assert.ok((await titleWidgetTexts(t, [d])).every((x) => !x.includes("픽업")), tag);
+  }
+});
+
+test("pickup: ILL status transitions next to a same-title loan: loan first, transit stays visible, arrival is history, inactive history is not an item", async () => {
+  const expect = {
+    요청중: "transit", 신청중: "transit", 신청: "transit", 발송: "transit", 입수: "history",
+    완료: "none", 복귀중: "none", 신청취소: "none", 발송거절: "none", 요청거절: "none"
+  };
+  for (const [status, kind] of Object.entries(expect)) {
+    const r = groupBuild([loanRow({ title: "가상 전환 책", lib: OWN_M, due: "2099.05.05" })], [dooRow({ title: "가상 전환 책", status, providing: OWN_W, receiving: OWN_G })]);
+    const t = setup();
+    const d = { ...r, name: "u", status: r.uncertain ? "partial" : "ok", loanComplete: true, dooComplete: true, displayWarnings: r.displayIssues };
+    const s = plain(t.run("summarizeResults")([d]));
+    assert.equal(s.displayItems, 1, `${status}: one displayed item`);
+    assert.equal(s.displayLoans, 1, `${status}: current loan is the primary state`);
+    assert.equal(s.displayPickups, 0, `${status}: never a pickup next to the loan`);
+    const body = tbodyOf(t.run("buildHtmlPage")([d]));
+    assert.doesNotMatch(body, /badge-status badge-pickup/, status);
+    assert.match(body, /05\.05/, `${status}: loan due date shown`);
+    assert.match(body, /badge-dday/, `${status}: loan D-day shown`);
+    const texts = await titleWidgetTexts(t, [d]);
+    const tagLine = texts.find((x) => /^\[D-\d+\]/.test(x));
+    assert.ok(tagLine, `${status}: loan tag first in the widget`);
+    if (kind === "transit") {
+      assert.equal(r.items.length, 2, status);
+      assert.match(body, /badge-status badge-transit/, `${status}: transit still visible`);
+      assert.ok(tagLine.includes("[이동중]"), `${status}: transit extra tag`);
+    } else if (kind === "history") {
+      assert.equal(r.items.length, 2, status);
+      assert.match(body, /rec-history/, status);
+      assert.ok(!tagLine.includes("[픽업필요]"), status);
+    } else {
+      assert.equal(r.items.length, 1, `${status}: inactive history never becomes an item`);
+      assert.doesNotMatch(body, /rec-history|badge-transit/, status);
+    }
+  }
+  // 대출이 없으면 도착은 픽업 안내, 진행 중은 이동중, 지난 이력은 표시하지 않는다
+  for (const [status, type] of [["입수", "픽업필요"], ["발송", "이동중"], ["요청중", "이동중"], ["완료", null], ["복귀중", null]]) {
+    const r = groupBuild([], [dooRow({ title: "가상 단독 책", status, providing: OWN_W, receiving: OWN_G })]);
+    assert.deepEqual(r.items.map((i) => i.statusType), type ? [type] : [], status);
+  }
+});
+
+test("pickup: volume, part, subtitle and edition variants never hide an actionable pickup behind a loan", async () => {
+  const pairs = [
+    ["가상 시리즈 1", "가상 시리즈 2"],
+    ["가상 시리즈 1권", "가상 시리즈 2권"],
+    ["가상 이야기 상", "가상 이야기 하"],
+    ["가상 이야기", "가상 이야기 : 두 번째 부제"],
+    ["가상 이야기", "가상 이야기 (개정판)"],
+    ["가상 이야기 제2판", "가상 이야기 제3판"]
+  ];
+  for (const [loanTitle, illTitle] of pairs) {
+    const t = setup();
+    const r = groupBuild([loanRow({ title: loanTitle, lib: OWN_M })], [dooRow({ title: illTitle, status: "입수", providing: OWN_W, receiving: OWN_G })]);
+    const d = { ...r, name: "u", status: r.uncertain ? "partial" : "ok", loanComplete: true, dooComplete: true, displayWarnings: r.displayIssues };
+    const s = plain(t.run("summarizeResults")([d]));
+    assert.deepEqual([s.displayItems, s.displayPickups], [2, 1], `${loanTitle} / ${illTitle}`);
+    assert.ok((await titleWidgetTexts(t, [d])).includes("[픽업필요] "), `${loanTitle} / ${illTitle}`);
+  }
+  // 공백·유니코드 정규화(NFD/NFC) 차이만 있는 제목은 같은 제목이다
+  const t = setup();
+  const nfd = "가상 이야기".normalize("NFD");
+  const r = groupBuild([loanRow({ title: "가상  이야기", lib: OWN_M })], [dooRow({ title: nfd, status: "입수", providing: OWN_W, receiving: OWN_G })]);
+  const d = { ...r, name: "u", status: r.uncertain ? "partial" : "ok", loanComplete: true, dooComplete: true, displayWarnings: r.displayIssues };
+  assert.equal(plain(t.run("summarizeResults")([d])).displayPickups, 0);
+});
+
+// ---------------------------------------------------------------- 반납처·소장처 일관성
+test("return-location consistency: normal, resolved booksole and unknown booksole loans use the same place in card, library summary and widget", async () => {
+  const UNKNOWN_TITLE = "가상 미확인 책";
+  const { run, r, d } = rlBuild(
+    [loanRow({ title: "가상 일반 책", lib: OWN_W, due: "2099.10.10" }), rlLoan(), loanRow({ title: UNKNOWN_TITLE, lib: RL_OWN, booksole: true, due: "2099.10.20" })],
+    [rlIll({ status: "완료" })]
+  );
+  assert.equal(r.loanCount, 3);
+  const html = run("buildHtmlPage")([d]);
+  const body = tbodyOf(html);
+  assert.ok(body.includes(`📍반납처: ${OWN_W}`), "normal loan keeps its own library as return place");
+  assert.ok(body.includes(`📍반납처: <strong>${RL_RECV}</strong> <span class="prov-text">(소장: ${RL_OWN})</span>`), "resolved: receiving is return, providing is owner");
+  assert.ok(body.includes(`📍반납처 미확인 <span class="prov-text">(대출목록 도서관: ${RL_OWN})</span>`), "unknown: no guessed return place");
+  assert.ok(!body.includes(`반납처: <strong>${RL_OWN}</strong>`) && !body.includes(`반납처: ${RL_OWN}`), "owner never shown as return place");
+  const summary = rlSummary(html);
+  for (const part of ["📍<strong>위례</strong>: 1권", "📍<strong>스마트</strong>: 1권", "📍<strong>반납처 미확인</strong>: 1권"]) assert.ok(summary.includes(part), `${part} in ${summary}`);
+  assert.ok(!summary.includes(RL_OWN), "summary never counts the owner as a return place");
+  const sum = [...summary.matchAll(/: (\d+)권/g)].reduce((a, m) => a + Number(m[1]), 0);
+  assert.equal(sum, r.loanCount, "summary quantities add up to the loans");
+  const texts = await rlWidget(run, [d]);
+  assert.ok(texts.some((x) => x.endsWith("가상 일반 책 (위례)")));
+  assert.ok(texts.some((x) => x.endsWith(`${RL_TITLE} (스마트)`)));
+  assert.ok(texts.some((x) => x.endsWith(`${UNKNOWN_TITLE} (미확인)`)));
+  assert.ok(texts.every((x) => !x.includes(`(${RL_OWN})`)));
+  assert.deepEqual(r.libSummary, { 위례: 1, [RL_OWN]: 2 }, "raw libSummary unchanged (display recount only)");
+});
+
+// ---------------------------------------------------------------- 진행 화면과 오류
+test("progress: starts as 조회 중, updates account by account, and a mix of ok / parse error / network failure ends in a non-empty final page", async () => {
+  const brokenLoan = `<html><body><header>${barcodeInfo({ name: "이두리", memberId: "22220002" })}</header><div class="list"><div class="myArticle-list"><div class="title">가상 깨진 행</div><div class="statusBox">대출중</div></div></div></body></html>`;
+  const t = setup({
+    mem: threeMembers(),
+    accounts: [A, B, C],
+    opts: { override: async (req, ctx) => {
+      if (ctx.userId === "bob" && ctx.path === LOAN_PATH) return { status: 200, body: brokenLoan };
+      if (ctx.userId === "carol" && ctx.path === "/intro/index.do") return { throw: "timeout (synthetic)" };
+      return null;
+    } }
+  });
+  await t.run("main")();
+  const frames = t.env.log.frames;
+  assert.match(frames[0], /조회 중 · 0\/3/, "first frame is the in-progress page");
+  assert.ok(!frames[0].includes(COMMON), "no rows before any account finished");
+  const firstWithA = frames.findIndex((h) => h.includes("A 책 1"));
+  assert.ok(firstWithA > 0 && /조회 중/.test(frames[firstWithA]), "account A appears while later accounts are still in progress");
+  const final = t.env.log.html[0];
+  assert.ok(final.length > 2000 && /<tbody>/.test(final), "final page has content (not a blank screen)");
+  assert.doesNotMatch(final, /조회 중 · /, "final page is not left in the in-progress state");
+  assert.ok(final.includes("A 책 1"), "successful account still shown");
+  for (const acc of [B, C]) assert.ok(final.includes(acc.label), `${acc.id}: failed account still named on the final page`);
+  assert.doesNotMatch(final, /현재 이용 중인 도서가 없습니다/);
+  assert.equal(t.env.log.alerts.length, 0, "no MAIN_ERROR alert");
+});
+
+test("progress: when every account fails the final page and widget say 조회 실패, never an empty or zero-loan state", async () => {
+  for (const runsInWidget of [false, true]) {
+    const t = setup({ accounts: [A, B], runsInWidget, opts: { override: async () => ({ throw: "offline (synthetic)" }) } });
+    await t.run("main")();
+    if (runsInWidget) {
+      const texts = t.env.log.widgets[0].texts;
+      assert.ok(texts.includes("⚠️ 조회 실패"));
+      assert.ok(texts.some((x) => x.startsWith(`⚠️ ${A.label}:`)) && texts.some((x) => x.startsWith(`⚠️ ${B.label}:`)));
+      assert.ok(!texts.some((x) => /조회 완료|현재 이용 중인 도서가 없습니다/.test(x)));
+    } else {
+      const final = t.env.log.html[0];
+      assert.ok(final.includes(A.label) && final.includes(B.label));
+      assert.doesNotMatch(final, /현재 이용 중인 도서가 없습니다|조회 중 · /);
+    }
+  }
+});
+
+// ---------------------------------------------------------------- 업데이트 호환성
+const INSTALLED = "/local/Documents/songpa-loan-tracker.js";
+const INSTALLED_CODE = "// 기존 설치본 (합성)\nconst SCRIPT_VERSION = \"1.2.7\";\nawait main();\nScript.complete();\n";
+const remoteScript = (ver) => readFileSync(TRACKER, "utf8").replace(/const SCRIPT_VERSION = "[^"]+";/, `const SCRIPT_VERSION = "${ver}";`);
+function updaterEnv(response, { runsInWidget = false, choices = [0, 0] } = {}) {
+  const env = createEnv({ handler: async (req) => (req.url.startsWith(BASE) ? { throw: "library must not be contacted (synthetic)" } : typeof response === "function" ? response(req) : response), runsInWidget, files: { [INSTALLED]: INSTALLED_CODE } });
+  env.alertScript.push(...choices.map((choice) => ({ choice })));
+  return { env, run: loadScript(TRACKER, env.globals) };
+}
+
+test("update: a newer complete script is written only after confirmation, to this script's own file, and the run stops there", async () => {
+  const code = remoteScript("9.9.9");
+  const { env, run } = updaterEnv({ status: 200, body: code });
+  const r = plain(await run("checkUpdateIfNeeded")());
+  assert.deepEqual(r, { updated: true });
+  assert.equal(env.files.get(INSTALLED), code, "exact remote text written");
+  assert.equal(env.log.requests.length, 1);
+  assert.ok(env.log.requests[0].url.startsWith(`${run("UPDATE_URL")}?t=`), "only the public raw GitHub file is requested");
+  assert.match(run("UPDATE_URL"), /^https:\/\/raw\.githubusercontent\.com\/pchuri\/songpa-loan-tracker\/main\/scriptable\/songpa-loan-tracker\.js$/);
+  assert.match(env.log.alerts[1].title, /업데이트 완료/);
+
+  const lib = makeLibrary(members());
+  const t2 = createEnv({ handler: async (req) => (req.url.startsWith(BASE) ? lib.handler(req) : { status: 200, body: code }), files: { [INSTALLED]: INSTALLED_CODE }, keychain: { SPLIB_ACCOUNTS: JSON.stringify([A, B]) } });
+  t2.alertScript.push({ choice: 0 }, { choice: 0 });
+  await loadScript(TRACKER, t2.globals)("main")();
+  assert.equal(t2.log.requests.filter((x) => x.url.startsWith(BASE)).length, 0, "after updating, no library login with the old code");
+  assert.equal(t2.files.get(INSTALLED), code);
+});
+
+test("update: cancel, widget mode, same/older version, offline and write failure all keep the installed script byte-identical", async () => {
+  const code = remoteScript("9.9.9");
+  const cancel = updaterEnv({ status: 200, body: code }, { choices: [1] });
+  assert.deepEqual(plain(await cancel.run("checkUpdateIfNeeded")()), { hasUpdate: false });
+  assert.equal(cancel.env.files.get(INSTALLED), INSTALLED_CODE, "cancel");
+
+  const widget = updaterEnv({ status: 200, body: code }, { runsInWidget: true, choices: [] });
+  assert.deepEqual(plain(await widget.run("checkUpdateIfNeeded")()), { hasUpdate: true, remoteVer: "9.9.9" });
+  assert.equal(widget.env.log.alerts.length, 0, "widget never prompts");
+  assert.equal(widget.env.files.get(INSTALLED), INSTALLED_CODE, "widget never writes");
+
+  for (const ver of ["1.2.7", "1.2.6", "1.0", "0.9.9"]) {
+    const same = updaterEnv({ status: 200, body: remoteScript(ver) });
+    assert.deepEqual(plain(await same.run("checkUpdateIfNeeded")()), { hasUpdate: false }, ver);
+    assert.equal(same.env.log.alerts.length, 0, ver);
+    assert.equal(same.env.files.get(INSTALLED), INSTALLED_CODE, ver);
+  }
+
+  const offline = updaterEnv({ throw: "The Internet connection appears to be offline. (synthetic)" });
+  assert.deepEqual(plain(await offline.run("checkUpdateIfNeeded")()), { hasUpdate: false });
+  assert.equal(offline.env.files.get(INSTALLED), INSTALLED_CODE, "offline");
+  assert.equal(offline.env.log.requests[0].timeout, 3, "update check is short so an offline device still reaches the library query");
+
+  const failing = updaterEnv({ status: 200, body: code });
+  const fm = failing.env.globals.FileManager.iCloud();
+  fm.writeString = () => { throw new Error("iCloud write failed (synthetic)"); };
+  assert.deepEqual(plain(await failing.run("checkUpdateIfNeeded")()), { hasUpdate: false });
+  assert.equal(failing.env.files.get(INSTALLED), INSTALLED_CODE, "write failure");
+  assert.ok(!failing.env.log.alerts.some((a) => /업데이트 완료/.test(a.title)), "no false success message");
+});
+
+test("update: server errors, HTML pages and truncated downloads that still contain a newer SCRIPT_VERSION never overwrite the installed script", async () => {
+  const code = remoteScript("9.9.9");
+  const bad = {
+    "HTTP 404 with a version string": { status: 404, body: code },
+    "HTTP 500": { status: 500, body: code },
+    "HTML error page": { status: 200, body: `<!DOCTYPE html><html><body><pre>const SCRIPT_VERSION = "9.9.9";</pre></body></html>` },
+    "truncated download": { status: 200, body: code.slice(0, Math.floor(code.length / 2)) },
+    "version line only": { status: 200, body: 'const SCRIPT_VERSION = "9.9.9";' },
+    "empty body": { status: 200, body: "" }
+  };
+  for (const [name, res] of Object.entries(bad)) {
+    for (const runsInWidget of [false, true]) {
+      const u = updaterEnv(res, { runsInWidget });
+      const r = plain(await u.run("checkUpdateIfNeeded")());
+      assert.deepEqual(r, { hasUpdate: false }, `${name} (widget=${runsInWidget})`);
+      assert.equal(u.env.files.get(INSTALLED), INSTALLED_CODE, `${name}: installed script preserved`);
+      assert.equal(u.env.log.alerts.length, 0, `${name}: no update prompt for an unusable download`);
+    }
+  }
+});
+
+test("update: a complete script served with CRLF line endings is still accepted", async () => {
+  const code = remoteScript("9.9.9").replace(/\n/g, "\r\n");
+  const { env, run } = updaterEnv({ status: 200, body: code });
+  assert.deepEqual(plain(await run("checkUpdateIfNeeded")()), { updated: true });
+  assert.equal(env.files.get(INSTALLED), code);
+});
+
+test("update: the published script stays readable by older installed updaters (version regex, single trailing entrypoint, no secrets)", () => {
+  const src = readFileSync(TRACKER, "utf8");
+  // v1.2.6 이하 설치본의 업데이트 확인은 이 정규식으로 첫 SCRIPT_VERSION만 읽고 본문을 그대로 덮어쓴다
+  const legacy = src.match(/const\s+SCRIPT_VERSION\s*=\s*["']([^"']+)["']/);
+  const run = loadScript(TRACKER, createEnv().globals);
+  assert.equal(legacy[1], run("SCRIPT_VERSION"));
+  assert.match(legacy[1], /^\d+\.\d+\.\d+$/);
+  assert.ok(src.endsWith("\nawait main();\nScript.complete();\n"));
+  assert.equal(src.split("\nawait main();").length, 2);
+  assert.doesNotMatch(src, /JSESSIONID=[A-Za-z0-9]{8,}|password\s*[:=]\s*["'][^"']+["']/i);
+  assert.equal(run("KEYCHAIN_KEY"), "SPLIB_ACCOUNTS", "existing Keychain item name unchanged");
+});
+
+// ---------------------------------------------------------------- 날짜·D-day (한국 시간)
+async function withSeoulClock(iso, fn) {
+  const RealDate = Date;
+  const prevTZ = process.env.TZ;
+  process.env.TZ = "Asia/Seoul";
+  try {
+    const now = new RealDate(iso).getTime();
+    class FixedDate extends RealDate {
+      constructor(...a) { if (a.length) super(...a); else super(now); }
+      static now() { return now; }
+    }
+    const env = createEnv();
+    env.globals.Date = FixedDate;
+    return await fn(loadScript(TRACKER, env.globals), env);
+  } finally {
+    if (prevTZ === undefined) delete process.env.TZ;
+    else process.env.TZ = prevTZ;
+  }
+}
+function ddays(run, dues) {
+  const ls = dues.map((due, i) => run("parseLoanRow")(loanRow({ title: `가상 날짜 책 ${i}`, due, loanKey: `D${i}`, regNo: `DR${i}` })));
+  const r = plain(run("buildMemberBooks")(ls, [], "u", { loanPages: 1, dooPages: 1 }));
+  return Object.fromEntries(r.items.map((i) => [i.dueDate, i.diffDays]));
+}
+
+test("dates: D-day follows the Korean calendar date at midnight, month, year and leap-day boundaries", async () => {
+  const cases = [
+    ["2026-10-18T23:59:59+09:00", { "2026.10.17": -1, "2026.10.18": 0, "2026.10.19": 1, "2026.11.01": 14 }],
+    ["2026-10-19T00:00:00+09:00", { "2026.10.18": -1, "2026.10.19": 0, "2026.10.20": 1 }],
+    // UTC로는 아직 10월 18일이지만 한국은 10월 19일 00:30
+    ["2026-10-18T15:30:00Z", { "2026.10.18": -1, "2026.10.19": 0 }],
+    ["2026-10-31T23:00:00+09:00", { "2026.10.31": 0, "2026.11.01": 1, "2026.11.30": 30 }],
+    ["2026-12-31T12:00:00+09:00", { "2026.12.30": -1, "2026.12.31": 0, "2027.01.01": 1, "2027.01.10": 10 }],
+    ["2028-02-28T09:00:00+09:00", { "2028.02.29": 1, "2028.03.01": 2 }],
+    ["2027-02-28T09:00:00+09:00", { "2027.03.01": 1 }]
+  ];
+  for (const [now, want] of cases) {
+    await withSeoulClock(now, async (run) => {
+      assert.deepEqual(ddays(run, Object.keys(want)), want, now);
+    });
+  }
+});
+
+test("dates: widget and card labels at the boundary say 오늘 반납 / D-1 / 연체 1일 from the same diffDays", async () => {
+  await withSeoulClock("2026-10-18T23:59:00+09:00", async (run) => {
+    const ls = [["가상 오늘 책", "2026.10.18"], ["가상 내일 책", "2026.10.19"], ["가상 어제 책", "2026.10.17"]].map(([title, due], i) => run("parseLoanRow")(loanRow({ title, due, loanKey: `K${i}`, regNo: `KR${i}` })));
+    const r = plain(run("buildMemberBooks")(ls, [], "u", { loanPages: 1, dooPages: 1 }));
+    const d = { ...r, name: "u", status: "ok", loanComplete: true, dooComplete: true, displayWarnings: [] };
+    const texts = (await run("createWidget")([d], null)).texts;
+    assert.ok(texts.includes("[연체 1일] ") && texts.includes("[오늘 반납] ") && texts.includes("[D-1] "), texts.join(" | "));
+    const body = tbodyOf(run("buildHtmlPage")([d]));
+    for (const label of ["연체 1일", "오늘 반납", "D-1"]) assert.match(body, new RegExp(`badge-dday [a-z-]+">${label}<`), label);
+  });
 });

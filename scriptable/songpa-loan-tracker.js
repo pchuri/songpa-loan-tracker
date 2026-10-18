@@ -37,6 +37,9 @@ async function checkUpdateIfNeeded() {
     const req = new Request(`${UPDATE_URL}?t=${Date.now()}`);
     req.timeoutInterval = 3;
     const remoteCode = await req.loadString();
+    // 정상 응답(200)의 완전한 스크립트(끝의 진입점까지 받음)만 업데이트로 본다. 오류 페이지·잘린 내려받기로 설치본을 덮어쓰지 않는다.
+    const status = req.response ? req.response.statusCode : null;
+    if (status !== 200 || !/\nawait main\(\);\s*\nScript\.complete\(\);\s*$/.test(remoteCode)) return { hasUpdate: false };
 
     const match = remoteCode.match(/const\s+SCRIPT_VERSION\s*=\s*["']([^"']+)["']/);
     if (!match) return { hasUpdate: false };
@@ -1504,7 +1507,8 @@ function buildMemberBooks(loanRecords, dooRecords, userName, info) {
       diffDays,
       dueDate: r.dueDateStr,
       shortDate: `${pad2(r.mm)}.${pad2(r.dd)}`,
-      isInter: r.isBooksole || Boolean(activeDoo)
+      isInter: r.isBooksole || Boolean(activeDoo),
+      displayCopyScope: r.scoped.copy || null // 표시 전용: 같은 도서관 범위 등록번호 (화면 묶음 제외 판단에만)
     });
     if (displayLocations.has(r)) {
       const loc = displayLocations.get(r);
@@ -1547,7 +1551,8 @@ function buildMemberBooks(loanRecords, dooRecords, userName, info) {
       diffDays: pickup ? -999 : 999, // 픽업필요는 맨 위, 이동중은 맨 아래
       dueDate: "-",
       shortDate: "-",
-      isInter: true
+      isInter: true,
+      displayCopyScope: d.scoped.copy || null // 표시 전용: 제공(소장) 도서관 범위 등록번호
     });
     itemOf.set(d, items[items.length - 1]);
   }
@@ -2400,9 +2405,22 @@ function displayTitleGroups(items) {
     if (!byTitle.has(k)) byTitle.set(k, []);
     byTitle.get(k).push(i);
   });
+  // 같은 도서관 범위 등록번호가 양쪽에 있고 모든 대출과 다르면 다른 실물 책이다: 그 상호대차는 묶지 않는다 (픽업 안내 유지).
+  // 범위가 다르거나 한쪽이라도 등록번호가 없으면 비교할 수 없으므로 기존처럼 전체 제목으로 묶는다.
+  const copyOf = b => {
+    const c = b && typeof b.displayCopyScope === "string" ? b.displayCopyScope : "";
+    const k = c.lastIndexOf("#"); // 등록번호에는 #이 없다 (COPY_ID_SPEC)
+    return k > 0 && k < c.length - 1 ? { lib: c.slice(0, k), id: c.slice(k + 1) } : null;
+  };
   const mixed = new Set();
   for (const idxs of byTitle.values()) {
-    if (new Set(idxs.map(i => kindOf(list[i]))).size > 1) idxs.forEach(i => mixed.add(i));
+    const loanCopies = idxs.filter(i => kindOf(list[i]) === "loan").map(i => copyOf(list[i]));
+    const apart = i => {
+      const c = kindOf(list[i]) === "loan" ? null : copyOf(list[i]);
+      return Boolean(c) && loanCopies.length > 0 && loanCopies.every(l => l && l.lib === c.lib && l.id !== c.id);
+    };
+    const members = idxs.filter(i => !apart(i));
+    if (new Set(members.map(i => kindOf(list[i]))).size > 1) members.forEach(i => mixed.add(i));
   }
   const groups = [];
   const placed = new Set();
@@ -2413,7 +2431,7 @@ function displayTitleGroups(items) {
       groups.push({ title: b ? b.title : "", records: [b] });
       return;
     }
-    const records = byTitle.get(displayTitleKey(b.title)).filter(j => !placed.has(j)).map(j => {
+    const records = byTitle.get(displayTitleKey(b.title)).filter(j => mixed.has(j) && !placed.has(j)).map(j => {
       placed.add(j);
       return list[j];
     });
