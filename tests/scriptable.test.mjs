@@ -3450,8 +3450,8 @@ test("display group: placeholder owning/providing library strings are unknown, n
 
 test("v1.2.6 title-display-1: display totals say 건; progressive guards preserved", async () => {
   const run = loadScript(TRACKER, createEnv().globals);
-  assert.equal(run("SCRIPT_VERSION"), "1.2.7");
-  assert.equal(run("NATIVE_PROBE_BUILD"), "return-location-1");
+  assert.equal(run("SCRIPT_VERSION"), "1.2.8");
+  assert.equal(run("NATIVE_PROBE_BUILD"), "copy-evidence-1");
   assert.equal(run("NATIVE_TRACE"), false);
   const t = setup();
   const html = t.run("buildHtmlPage")(await t.fetchAll());
@@ -3998,13 +3998,26 @@ test("return-location: another account's receipt never influences a booksole loa
   assert.ok(texts.some((x) => x.includes(`${RL_TITLE} (스마트)`)));
 });
 
-test("return-location-1 release constants: version strictly newer than published 1.2.6, trace off", () => {
+test("copy-evidence-1 release constants: version strictly newer than released 1.2.7, trace off", () => {
   const run = loadScript(TRACKER, createEnv().globals);
-  assert.equal(run("SCRIPT_VERSION"), "1.2.7");
-  assert.equal(run("NATIVE_PROBE_BUILD"), "return-location-1");
+  assert.equal(run("SCRIPT_VERSION"), "1.2.8");
+  assert.equal(run("NATIVE_PROBE_BUILD"), "copy-evidence-1");
   assert.equal(run("NATIVE_TRACE"), false);
-  assert.equal(run("isNewerVersion")(run("SCRIPT_VERSION"), "1.2.6"), true);
-  assert.equal(run("isNewerVersion")("1.2.6", run("SCRIPT_VERSION")), false);
+  assert.equal(run("isNewerVersion")(run("SCRIPT_VERSION"), "1.2.7"), true);
+  assert.equal(run("isNewerVersion")("1.2.7", run("SCRIPT_VERSION")), false);
+});
+
+test("copy-evidence-1 update path: published source keeps the PR16 completeness invariant and a released 1.2.7 client sees a strictly newer 1.2.8", () => {
+  // Published-artifact completeness invariant: trailing-entrypoint guard added by PR16, not yet in any released client.
+  // Legacy compatibility: a released 1.2.7 client uses only the version regex and strict numeric comparison.
+  const src = readFileSync(TRACKER, "utf8");
+  assert.match(src, /\nawait main\(\);\s*\nScript\.complete\(\);\s*$/, "published artifact ends with the trailing entrypoint (PR16 completeness invariant, not a released 1.2.7 gate)");
+  const m = src.match(/const\s+SCRIPT_VERSION\s*=\s*["']([^"']+)["']/);
+  assert.ok(m, "legacy version regex finds SCRIPT_VERSION");
+  assert.equal(m[1], "1.2.8");
+  assert.match(m[1], /^\d+\.\d+\.\d+$/, "strictly numeric: legacy Number() split never yields NaN");
+  const run = loadScript(TRACKER, createEnv().globals);
+  assert.equal(run("isNewerVersion")(m[1], "1.2.7"), true, "released 1.2.7 clients are offered the update");
 });
 
 
@@ -4326,7 +4339,7 @@ test("update: cancel, widget mode, same/older version, offline and write failure
   assert.equal(widget.env.log.alerts.length, 0, "widget never prompts");
   assert.equal(widget.env.files.get(INSTALLED), INSTALLED_CODE, "widget never writes");
 
-  for (const ver of ["1.2.7", "1.2.6", "1.0", "0.9.9"]) {
+  for (const ver of ["1.2.8", "1.2.7", "1.2.6", "1.0", "0.9.9"]) {
     const same = updaterEnv({ status: 200, body: remoteScript(ver) });
     assert.deepEqual(plain(await same.run("checkUpdateIfNeeded")()), { hasUpdate: false }, ver);
     assert.equal(same.env.log.alerts.length, 0, ver);
@@ -4440,4 +4453,131 @@ test("dates: widget and card labels at the boundary say 오늘 반납 / D-1 / �
     const body = tbodyOf(run("buildHtmlPage")([d]));
     for (const label of ["연체 1일", "오늘 반납", "D-1"]) assert.match(body, new RegExp(`badge-dday [a-z-]+">${label}<`), label);
   });
+});
+
+// ================================================================ 다른 복본 픽업 분리: 명시 등록번호 근거만 (가상 값만)
+// 옛 형식(체크박스) 등록번호는 ids·scoped·연결에 그대로 쓰되 화면의 다른 복본 분리에는 쓰지 않는다 (이름공간 미확인, 보수적 처리).
+const DC_TITLE = "가상 근거 책";
+const dcCheck = (value) => `<input name="check" type="checkbox" value="${value}">`;
+const dcBeforeTitle = (row, html) => {
+  assert.ok(row.includes('<div class="title">'), "fixture has a title insertion point");
+  return row.replace('<div class="title">', `${html}<div class="title">`);
+};
+const dcLoan = (o = {}, extra = "") => dcBeforeTitle(loanRow({ title: DC_TITLE, lib: OWN_M, ...o }), extra);
+const dcIll = (o = {}, extra = "") => dcBeforeTitle(dooRow({ title: DC_TITLE, status: "입수", providing: OWN_M, receiving: OWN_G, ...o }), extra);
+const dcGroups = (run, r) => plain(run("displayTitleGroups")(r.items));
+const dcData = (r) => ({ ...r, name: "u", status: r.uncertain ? "partial" : "ok", loanComplete: true, dooComplete: true, displayWarnings: r.displayIssues });
+
+test("copy split: legacy-only ILL copy id (no 등록번호 label) keeps ids/scoped/join but never splits a pickup from the loan", async () => {
+  const run = loadScript(TRACKER, createEnv().globals);
+  const prov = run("libScope")(OWN_M);
+  const recv = run("libScope")(OWN_G);
+  const loanHtml = dcLoan({ loanKey: "L1", regNo: "EM001" });
+  const legacyIll = dcIll({ illKey: "I1" }, dcCheck("ILLSEQ9^EM002^MA^X^Y"));
+  const p = run("parseDooraeRow")(legacyIll);
+  assert.deepEqual(plain(p.ids), { ill: "I1", copy: "EM002" }, "legacy copy id still parsed");
+  assert.deepEqual(plain(p.scoped), { ill: `${prov}>${recv}#I1`, copy: `${prov}#EM002` });
+  assert.equal(p.stableKey, `ill:${prov}>${recv}#I1`);
+  assert.equal(p.displayCopyExplicit, false);
+  const r = groupBuild([loanHtml], [legacyIll]);
+  assert.equal(r.pickupCount, 1, "raw pickup record kept");
+  const ill = r.items.find((i) => i.statusType === "픽업필요");
+  assert.equal(ill.displayCopyScope, `${prov}#EM002`, "display scope value retained");
+  assert.equal(ill.displayCopyExplicit, false);
+  assert.equal(dcGroups(run, r).length, 1, "no different-copy split on legacy-only evidence");
+  const t = setup();
+  const d = dcData(r);
+  const s = plain(t.run("summarizeResults")([d]));
+  assert.deepEqual([s.displayItems, s.displayLoans, s.displayPickups, s.pickups], [1, 1, 0, 1]);
+  const body = tbodyOf(t.run("buildHtmlPage")([d]));
+  assert.doesNotMatch(body, /badge-status badge-pickup|tag-pickup|pickup-highlight/, "card shows no false pickup");
+  assert.match(body, /rec-history/);
+  const texts = await titleWidgetTexts(t, [d]);
+  assert.ok(texts.every((x) => !x.includes("픽업")), texts.join(" | "));
+  // 대조: 같은 행에 명시 "등록번호" 라벨이 있으면 분리된다
+  const explicit = groupBuild([loanHtml], [dcIll({ illKey: "I1", regNo: "EM002" }, dcCheck("ILLSEQ9^EM002^MA^X^Y"))]);
+  assert.equal(dcGroups(run, explicit).length, 2);
+  // 옛 형식 등록번호의 확정 연결은 그대로
+  const joined = groupBuild([dcLoan({ loanKey: "L1", regNo: "EM002" })], [dcIll({ illKey: "I1", status: "발송" }, dcCheck("ILLSEQ9^EM002^MA^X^Y"))]);
+  assert.equal(joined.items.length, 1);
+  assert.equal(joined.items[0].lib, OWN_G);
+});
+
+test("copy split: legacy-only loan copy id keeps loan ids/scoped/stableKey but never enables a pickup split", () => {
+  const run = loadScript(TRACKER, createEnv().globals);
+  const lib = run("libScope")(OWN_M);
+  const legacyLoan = dcLoan({}, dcCheck("L7^EM001^A^B^C"));
+  const p = run("parseLoanRow")(legacyLoan);
+  assert.deepEqual(plain(p.ids), { loan: "L7", copy: "EM001" });
+  assert.deepEqual(plain(p.scoped), { loan: `${lib}#L7`, copy: `${lib}#EM001` });
+  assert.equal(p.stableKey, `loan:${lib}#L7`);
+  assert.equal(p.key, p.stableKey);
+  assert.equal(p.displayCopyExplicit, false);
+  const ill = dcIll({ illKey: "I1", regNo: "EM002" });
+  const r = groupBuild([legacyLoan], [ill]);
+  const loan = r.items.find((i) => i.statusType === "대출중");
+  assert.equal(loan.displayCopyScope, `${lib}#EM001`);
+  assert.equal(loan.displayCopyExplicit, false);
+  assert.equal(r.pickupCount, 1);
+  assert.equal(dcGroups(run, r).length, 1);
+  const explicit = groupBuild([dcLoan({ regNo: "EM001" }, dcCheck("L7^EM001^A^B^C"))], [ill]);
+  assert.equal(dcGroups(run, explicit).length, 2, "explicit label agreeing with legacy is explicit evidence");
+});
+
+test("copy split: known placeholder library scopes never split, even with explicit differing 등록번호 on both sides", () => {
+  const run = loadScript(TRACKER, createEnv().globals);
+  for (const ph of ["미확인", "알 수 없음", "소장도서관 미확인", "-", "unknown"]) {
+    assert.equal(run("isPlaceholderLib")(ph), true, ph);
+    const scope = run("libScope")(ph);
+    const r = groupBuild([dcLoan({ lib: ph, loanKey: "L1", regNo: "EM001" })], [dcIll({ providing: ph, illKey: "I1", regNo: "EM002" })]);
+    const loan = r.items.find((i) => i.statusType === "대출중");
+    const ill = r.items.find((i) => i.statusType === "픽업필요");
+    assert.equal(loan.displayCopyScope, `${scope}#EM001`, `${ph}: scoped copy retained`);
+    assert.equal(ill.displayCopyScope, `${scope}#EM002`, `${ph}: scoped copy retained`);
+    assert.equal(loan.displayCopyExplicit, false, ph);
+    assert.equal(ill.displayCopyExplicit, false, ph);
+    assert.equal(r.pickupCount, 1, ph);
+    assert.equal(dcGroups(run, r).length, 1, ph);
+  }
+});
+
+test("copy split: semantic regNo field and data-reg-no are explicit evidence and keep the different-copy pickup actionable", async () => {
+  const run = loadScript(TRACKER, createEnv().globals);
+  const cases = {
+    "regNo field + data-reg-no": [dcLoan({ loanKey: "L1" }, `<input type="hidden" name="regNo" value="EM001">`), dcIll({ illKey: "I1" }, `<span data-reg-no="EM002"></span>`)],
+    "data-reg-no + accessionNo id": [dcLoan({ loanKey: "L1" }, `<span data-reg-no="EM001"></span>`), dcIll({ illKey: "I1" }, `<input type="hidden" id="accessionNo" value="EM002">`)],
+    "label agreeing with legacy": [dcLoan({ regNo: "EM001" }, dcCheck("L1^EM001^A^B^C")), dcIll({ illKey: "I1", regNo: "EM002" })]
+  };
+  for (const [name, [l, i]] of Object.entries(cases)) {
+    const r = groupBuild([l], [i]);
+    assert.equal(r.items.length, 2, name);
+    assert.ok(r.items.every((x) => x.displayCopyExplicit === true), name);
+    const groups = dcGroups(run, r);
+    assert.equal(groups.length, 2, name);
+    assert.ok(groups.some((g) => g.records.length === 1 && g.records[0].statusType === "픽업필요"), name);
+  }
+  const r = groupBuild(...cases["regNo field + data-reg-no"].map((x) => [x]));
+  const t = setup();
+  const d = dcData(r);
+  assert.equal(plain(t.run("summarizeResults")([d])).displayPickups, 1);
+  assert.equal(tbodyOf(t.run("buildHtmlPage")([d])).split("badge-status badge-pickup").length - 1, 1);
+  assert.ok((await titleWidgetTexts(t, [d])).includes("[픽업필요] "));
+});
+
+test("copy split: conflicting or ambiguous 등록번호 evidence never splits", () => {
+  const run = loadScript(TRACKER, createEnv().globals);
+  const cases = {
+    "loan label vs data-reg-no conflict": [dcLoan({ loanKey: "L1", regNo: "EM001" }, `<span data-reg-no="EM009"></span>`), dcIll({ illKey: "I1", regNo: "EM002" })],
+    "loan explicit vs legacy conflict": [dcLoan({ regNo: "EM001" }, dcCheck("L1^EM005^A^B^C")), dcIll({ illKey: "I1", regNo: "EM002" })],
+    "ILL two different labels": [dcLoan({ loanKey: "L1", regNo: "EM001" }), dcIll({ illKey: "I1", regNo: "EM002" }, `<span>등록번호 : EM003</span>`)],
+    "ILL explicit with ambiguous legacy checkboxes": [dcLoan({ loanKey: "L1", regNo: "EM001" }), dcIll({ illKey: "I1", regNo: "EM002" }, dcCheck("S1^EM002^A^B^C") + dcCheck("S2^EM004^A^B^C"))],
+    "ILL malformed data-reg-no": [dcLoan({ loanKey: "L1", regNo: "EM001" }), dcIll({ illKey: "I1", regNo: "EM002" }, `<span data-reg-no="EM 002!"></span>`)]
+  };
+  for (const [name, [l, i]] of Object.entries(cases)) {
+    const r = groupBuild([l], [i]);
+    assert.equal(r.loanCount, 1, name);
+    assert.equal(r.pickupCount, 1, name);
+    assert.ok(r.items.some((x) => x.displayCopyExplicit === false), name);
+    assert.equal(dcGroups(run, r).length, 1, name);
+  }
 });

@@ -5,9 +5,9 @@
 // https://github.com/pchuri/songpa-loan-tracker (MIT License)
 // 계정은 songpa-accounts.js로 iOS 키체인에 저장한다. 이 파일에는 계정 정보를 넣지 않는다.
 
-const SCRIPT_VERSION = "1.2.7";
+const SCRIPT_VERSION = "1.2.8";
 const NATIVE_TRACE = false;
-const NATIVE_PROBE_BUILD = "return-location-1";
+const NATIVE_PROBE_BUILD = "copy-evidence-1";
 const UPDATE_URL = "https://raw.githubusercontent.com/pchuri/songpa-loan-tracker/main/scriptable/songpa-loan-tracker.js";
 const KEYCHAIN_KEY = "SPLIB_ACCOUNTS";
 // 자동 업데이트는 이 메인 스크립트만 바꾼다. 계정 설정 스크립트는 사용자가 직접 새 버전으로 교체해야 한다.
@@ -522,6 +522,13 @@ function combineRowIdentifier(named, legacy, field) {
   return {value:named.value || other || null,ambiguous:false};
 }
 
+// 표시 전용 등록번호 출처: COPY_ID_SPEC의 명시 근거(regNo 등 필드·data-reg-no·"등록번호" 라벨)가 하나로 확정되고
+// 최종 등록번호와 같을 때만 true. 옛 형식(rowCopyIdentifiers: 체크박스·반납연기 링크)에서만 나온 값은 false.
+// 옛 형식 값이 틀렸다는 뜻이 아니다(상호대차 쪽 이름공간이 확인되지 않았을 뿐). ids·scoped·stableKey·key·지문·연결에는 쓰지 않는다.
+function explicitCopyEvidence(named, combined) {
+  return Boolean(named && !named.ambiguous && named.value && combined && !combined.ambiguous && combined.value === named.value);
+}
+
 // 대출 행 하나. 제목·반납일이 없으면 null(형식 오류)
 function parseLoanRow(row) {
   const tm = row.match(/<div class="title"[^>]*>([\s\S]*?)<\/div>/);
@@ -542,7 +549,8 @@ function parseLoanRow(row) {
   const text = htmlToText(row);
   const legacy = rowCopyIdentifiers(row);
   const loanId = combineRowIdentifier(typedId(row, text, LOAN_ID_SPEC), legacy, "loan");
-  const copyId = combineRowIdentifier(typedId(row, text, COPY_ID_SPEC), legacy, "copy");
+  const namedCopy = typedId(row, text, COPY_ID_SPEC);
+  const copyId = combineRowIdentifier(namedCopy, legacy, "copy");
   const rawLib = libMatch ? htmlToText(libMatch[1]) : "";
   const isBooksole = statusMatch ? statusMatch[1].includes("책솔이") : false;
   // 표시 전용 소장처 근거: 행에 명시된 "소장도서관"/"제공도서관" 라벨 값만 쓴다 (책솔이 행의 첫 <strong>은 수령처일 수 있음).
@@ -579,6 +587,7 @@ function parseLoanRow(row) {
     ids,
     scoped,
     legacyIdShape: {checkbox:legacy.checkbox,delayLink:legacy.delayLink,accepted:legacy.accepted,ambiguous:legacy.ambiguous},
+    displayCopyExplicit: explicitCopyEvidence(namedCopy, copyId), // 표시 전용 출처 (식별·중복·연결에는 쓰지 않음)
     ambiguousIds: loanId.ambiguous || copyId.ambiguous,
     stableKey,
     key: stableKey || `text:${text.slice(0, 300)}`
@@ -609,7 +618,8 @@ function parseDooraeRow(row) {
   const text = htmlToText(row);
   const legacy = rowCopyIdentifiers(row);
   const illId = typedId(row, text, ILL_ID_SPEC);
-  const copyId = combineRowIdentifier(typedId(row, text, COPY_ID_SPEC), legacy, "copy");
+  const namedCopy = typedId(row, text, COPY_ID_SPEC);
+  const copyId = combineRowIdentifier(namedCopy, legacy, "copy");
   const providing = labeledValue(row, "제공\\s*도서관");
   const receiving = labeledValue(row, "수령\\s*도서관");
   const prov = libScope(providing);
@@ -638,6 +648,7 @@ function parseDooraeRow(row) {
     ids,
     scoped,
     legacyIdShape: {checkbox:legacy.checkbox,delayLink:legacy.delayLink,accepted:legacy.accepted,ambiguous:legacy.ambiguous},
+    displayCopyExplicit: explicitCopyEvidence(namedCopy, copyId), // 표시 전용 출처 (식별·중복·연결에는 쓰지 않음)
     ambiguousIds: illId.ambiguous || copyId.ambiguous,
     stableKey,
     key: stableKey || `text:${text.slice(0, 300)}`
@@ -1508,7 +1519,8 @@ function buildMemberBooks(loanRecords, dooRecords, userName, info) {
       dueDate: r.dueDateStr,
       shortDate: `${pad2(r.mm)}.${pad2(r.dd)}`,
       isInter: r.isBooksole || Boolean(activeDoo),
-      displayCopyScope: r.scoped.copy || null // 표시 전용: 같은 도서관 범위 등록번호 (화면 묶음 제외 판단에만)
+      displayCopyScope: r.scoped.copy || null, // 표시 전용: 같은 도서관 범위 등록번호 (화면 묶음 제외 판단에만)
+      displayCopyExplicit: Boolean(r.displayCopyExplicit && r.scoped.copy && !isPlaceholderLib(r.rawLib)) // 표시 전용: 명시 등록번호 + 실제 도서관 범위
     });
     if (displayLocations.has(r)) {
       const loc = displayLocations.get(r);
@@ -1552,7 +1564,8 @@ function buildMemberBooks(loanRecords, dooRecords, userName, info) {
       dueDate: "-",
       shortDate: "-",
       isInter: true,
-      displayCopyScope: d.scoped.copy || null // 표시 전용: 제공(소장) 도서관 범위 등록번호
+      displayCopyScope: d.scoped.copy || null, // 표시 전용: 제공(소장) 도서관 범위 등록번호
+      displayCopyExplicit: Boolean(d.displayCopyExplicit && d.scoped.copy && !isPlaceholderLib(d.providing)) // 표시 전용: 명시 등록번호 + 실제 제공 도서관
     });
     itemOf.set(d, items[items.length - 1]);
   }
@@ -2393,7 +2406,7 @@ function visibleQualityNotes(b) {
 }
 
 // 표시 전용: 한 계정의 items 안에서 전체 제목(displayTitleKey: NFC·공백 정리만)이 같은 대출과 진행 중 상호대차 기록을
-// 한 화면 항목으로 묶는다. 소장처·식별번호·displayGroup은 보지 않는다. 같은 종류끼리만 같은 제목이면 따로 둔다.
+// 한 화면 항목으로 묶는다. 소장처·displayGroup은 보지 않고, 등록번호는 아래의 다른 복본 분리에만 쓴다. 같은 종류끼리만 같은 제목이면 따로 둔다.
 // 빈 제목은 묶지 않는다. 모든 기록을 원래 순서대로 한 번씩 담는다. 같은 실물 책이라는 판단이 아니다.
 function displayTitleGroups(items) {
   const list = Array.isArray(items) ? items : [];
@@ -2405,12 +2418,17 @@ function displayTitleGroups(items) {
     if (!byTitle.has(k)) byTitle.set(k, []);
     byTitle.get(k).push(i);
   });
-  // 같은 도서관 범위 등록번호가 양쪽에 있고 모든 대출과 다르면 다른 실물 책이다: 그 상호대차는 묶지 않는다 (픽업 안내 유지).
-  // 범위가 다르거나 한쪽이라도 등록번호가 없으면 비교할 수 없으므로 기존처럼 전체 제목으로 묶는다.
+  // 양쪽 모두 명시된 등록번호 근거(COPY_ID_SPEC 필드·data-reg-no·"등록번호" 라벨 → displayCopyExplicit)와 자리 표시 문구가 아닌
+  // 실제 도서관 범위가 있고, 같은 도서관에서 모든 대출과 다르면 다른 실물 책으로 보아 그 상호대차는 묶지 않는다 (픽업 안내 유지).
+  // 옛 형식(체크박스·반납연기 링크)에서만 나온 등록번호는 이 분리에 쓰지 않는다 (이름공간 미확인. 틀렸다고 확인된 것은 아님).
+  // 범위가 다르거나, 한쪽이라도 명시 근거가 없거나 모호하면 비교할 수 없으므로 기존처럼 전체 제목으로 묶는다.
   const copyOf = b => {
-    const c = b && typeof b.displayCopyScope === "string" ? b.displayCopyScope : "";
+    if (!b || b.displayCopyExplicit !== true) return null;
+    const c = typeof b.displayCopyScope === "string" ? b.displayCopyScope : "";
     const k = c.lastIndexOf("#"); // 등록번호에는 #이 없다 (COPY_ID_SPEC)
-    return k > 0 && k < c.length - 1 ? { lib: c.slice(0, k), id: c.slice(k + 1) } : null;
+    if (!(k > 0 && k < c.length - 1)) return null;
+    const lib = c.slice(0, k);
+    return isPlaceholderLib(lib) ? null : { lib, id: c.slice(k + 1) };
   };
   const mixed = new Set();
   for (const idxs of byTitle.values()) {

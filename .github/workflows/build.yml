@@ -118,8 +118,20 @@ jobs:
             dist/version.json
           if-no-files-found: error
 
+  scriptable-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: Run Scriptable tests
+        run: node --test tests/scriptable.test.mjs
+      - name: Check Scriptable identity build
+        run: node scripts/build-scriptable-identity-check.mjs --check
+
   verify-release:
-    needs: [build-macos, build-windows]
+    needs: [build-macos, build-windows, scriptable-tests]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
