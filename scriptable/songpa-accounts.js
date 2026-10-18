@@ -3,13 +3,15 @@
 // icon-color: green; icon-glyph: key;
 // 송파구립도서관 대출 현황 - 계정 설정 (iOS 키체인 저장)
 // https://github.com/pchuri/songpa-loan-tracker (MIT License)
-// 아이디·비밀번호·회원번호는 실행할 때 입력받아 이 기기의 키체인에만 저장한다. 코드에 적지 않는다.
+// 아이디·비밀번호·(선택) 회원번호는 실행할 때 입력받아 이 기기의 키체인에만 저장한다. 코드에 적지 않는다.
+// 이 스크립트는 사용자가 입력한 값만 저장한다. 메인 스크립트가 자동 확인한 회원번호 기록(SPLIB_VERIFIED_MEMBERS_V1)은 읽거나 쓰지 않는다.
 
 const KEYCHAIN_KEY = "SPLIB_ACCOUNTS";
 
 const MEMBER_ID_GUIDE =
-  "회원번호(대출증 바코드 번호)는 도서관 회원증이나 홈페이지 마이페이지에서 직접 확인한 값을 입력하세요. " +
-  "메인 스크립트는 조회한 화면의 회원번호가 이 값과 같을 때만 결과를 보여줍니다. 아이디와 다를 수 있습니다.";
+  "회원번호(대출증 바코드 번호)는 선택 항목입니다. 비워 두면 메인 스크립트가 조회할 때마다 서버가 확인한 로그인 아이디가 " +
+  "이 아이디와 정확히 같은지 확인하고, 처음 확인된 회원번호를 계정 목록과 별도로 저장해 다음 조회부터 대조합니다. " +
+  "직접 입력하려면 회원증이나 홈페이지 마이페이지에서 확인한 값을 넣으세요 (아이디와 다를 수 있음).";
 
 function loadAccounts() {
   if (!Keychain.contains(KEYCHAIN_KEY)) return [];
@@ -35,13 +37,20 @@ function normalizeMemberId(value) {
   return /^[A-Z0-9]{4,32}$/.test(s) ? s : null;
 }
 
-function memberIdStatus(acc) {
-  const m = normalizeMemberId(acc.memberId);
-  return m ? `회원번호 ••••${m.slice(-3)}` : "⚠️ 회원번호 미설정";
+function hasMemberId(acc) {
+  return acc.memberId !== undefined && acc.memberId !== null;
 }
 
-// 입력값을 계정 목록에 반영한다. 비워 둔 비밀번호·회원번호·회원 이름은 기존 값을 유지한다.
-// 회원 이름에 "-"를 넣으면 지운다. 성공하면 새 배열을 돌려준다(원본은 바꾸지 않음).
+function memberIdStatus(acc) {
+  if (!hasMemberId(acc)) return "회원번호 미설정 (선택 · 조회 때 서버 확인)";
+  const m = normalizeMemberId(acc.memberId);
+  return m ? `회원번호 ••••${m.slice(-3)}` : "⚠️ 회원번호 형식 오류 (계정 수정에서 고치거나 -로 지우세요)";
+}
+
+// 입력값을 계정 목록에 반영한다. 비워 둔 비밀번호·회원번호·회원 이름은 기존 값을 그대로 유지한다.
+// 회원번호는 선택 항목: 새 계정은 아이디·비밀번호만으로 저장할 수 있다. 입력하면 형식을 검사하고 정규화해서 저장한다.
+// 회원번호·회원 이름에 "-"를 넣으면 해당 수동 값을 지운다. 별도 검증 기록은 지우지 않는다.
+// 성공하면 새 배열을 돌려준다(원본은 바꾸지 않음).
 function mergeAccount(accounts, input) {
   const id = String(input.id || "").trim();
   if (!id) return { ok: false, message: "도서관 홈페이지 아이디를 입력해주세요." };
@@ -56,19 +65,18 @@ function mergeAccount(accounts, input) {
   if (!label || !pw) return { ok: false, message: "이름과 비밀번호를 입력해주세요." };
 
   const rawMember = String(input.memberId || "").trim();
-  let memberId;
-  if (rawMember) {
-    memberId = normalizeMemberId(rawMember);
+  const next = { ...(prev || {}), label, id, pw };
+  if (rawMember === "-") {
+    delete next.memberId;
+  } else if (rawMember) {
+    const memberId = normalizeMemberId(rawMember);
     if (!memberId) return { ok: false, message: "회원번호 형식이 올바르지 않습니다 (영문·숫자 4~32자)." };
-  } else {
-    memberId = prev ? normalizeMemberId(prev.memberId) : null;
+    if (accounts.some((a, i) => i !== idx && normalizeMemberId(a.memberId) === memberId)) {
+      return { ok: false, message: "같은 회원번호가 다른 계정에 이미 등록되어 있습니다." };
+    }
+    next.memberId = memberId;
   }
-  if (!memberId) return { ok: false, message: `회원번호를 입력해주세요.\n\n${MEMBER_ID_GUIDE}` };
-  if (accounts.some((a, i) => i !== idx && normalizeMemberId(a.memberId) === memberId)) {
-    return { ok: false, message: "같은 회원번호가 다른 계정에 이미 등록되어 있습니다." };
-  }
-
-  const next = { ...(prev || {}), label, id, pw, memberId };
+  // 비워 두면: 기존 계정의 회원번호 값은 그대로 두고(있을 때만), 없던 계정에는 만들지 않는다.
   const rawSite = String(input.siteName == null ? "" : input.siteName).trim();
   if (rawSite === "-") delete next.siteName;
   else if (rawSite) next.siteName = rawSite;
@@ -101,12 +109,12 @@ async function saveInput(accounts, input) {
 async function addAccount(accounts) {
   const a = new Alert();
   a.title = "➕ 계정 추가";
-  a.message = "송파구립도서관 홈페이지 로그인 정보와 직접 확인한 회원번호를 입력하세요.\n" +
+  a.message = "송파구립도서관 홈페이지 아이디·비밀번호를 입력하세요. 회원번호는 선택입니다.\n" +
     "같은 아이디가 이미 있으면 그 계정을 고칩니다 (비워 둔 비밀번호·회원번호·회원 이름은 기존 값 유지).\n\n" + MEMBER_ID_GUIDE;
   a.addTextField("이름 (화면에 표시)", "");
   a.addTextField("도서관 홈페이지 아이디", "");
   a.addSecureTextField("비밀번호", "");
-  a.addTextField("회원번호 (회원증·마이페이지에서 확인)", "");
+  a.addTextField("회원번호 (선택 · -로 기존 수동 값 지움)", "");
   a.addTextField("홈페이지 표시 회원 이름 (선택)", "");
   a.addAction("저장");
   a.addCancelAction("취소");
@@ -121,7 +129,7 @@ async function addAccount(accounts) {
   });
 }
 
-// 기존 계정의 이름·비밀번호·회원번호를 고친다. 아이디는 바꾸지 않는다.
+// 기존 계정의 이름·비밀번호·(선택) 회원번호를 고친다. 아이디는 바꾸지 않는다.
 async function editAccount(accounts) {
   const pick = new Alert();
   pick.title = "✏️ 수정할 계정 선택";
@@ -133,10 +141,10 @@ async function editAccount(accounts) {
 
   const a = new Alert();
   a.title = `✏️ ${acc.label} 수정`;
-  a.message = `아이디: ${acc.id}\n비밀번호를 비워 두면 기존 비밀번호를 유지합니다. 회원 이름에 "-"를 넣으면 지웁니다.\n\n${MEMBER_ID_GUIDE}`;
+  a.message = `아이디: ${acc.id}\n비밀번호·회원번호를 비워 두면 기존 값을 유지합니다. 회원번호·회원 이름에 "-"를 넣으면 해당 수동 값을 지웁니다. 별도 검증 기록은 유지합니다.\n\n${MEMBER_ID_GUIDE}`;
   a.addTextField("이름 (화면에 표시)", String(acc.label || ""));
   a.addSecureTextField("새 비밀번호 (비우면 유지)", "");
-  a.addTextField("회원번호 (회원증·마이페이지에서 확인)", normalizeMemberId(acc.memberId) || "");
+  a.addTextField("회원번호 (선택 · 비우면 유지 · -로 지움)", normalizeMemberId(acc.memberId) || "");
   a.addTextField("홈페이지 표시 회원 이름 (선택)", String(acc.siteName || ""));
   a.addAction("저장");
   a.addCancelAction("취소");
@@ -174,7 +182,7 @@ async function main() {
       : "저장된 계정이 없습니다. 계정을 추가해주세요.";
     a.addAction("➕ 계정 추가");
     if (accounts.length > 0) {
-      a.addAction("✏️ 계정 수정 (회원번호 입력)");
+      a.addAction("✏️ 계정 수정");
       a.addAction("🗑️ 계정 하나 삭제");
       a.addDestructiveAction("⚠️ 전체 삭제");
     }
