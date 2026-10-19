@@ -3248,8 +3248,8 @@ test("single-render: the run's own lease file is removed before the WebView is c
   assert.equal(t.env.files.has(LEASE), false);
 });
 
-test("single-render: a live foreign lease gives one honest deferred final page, no library request and no lease change", async () => {
-  const foreign = JSON.stringify({ owner: "other", expiresAt: Date.now() + 60000, kind: "widget" });
+test("single-render: a live foreign app lease gives one honest deferred final page, no library request and no lease change", async () => {
+  const foreign = JSON.stringify({ owner: "other", expiresAt: Date.now() + 60000, kind: "app" });
   const t = setup({ files: { [LEASE]: foreign } });
   await t.run("main")();
   assert.equal(requestsFor(t, "/intro").length, 0, "no library request");
@@ -3257,7 +3257,7 @@ test("single-render: a live foreign lease gives one honest deferred final page, 
   assert.ok(!srEvents(t).some((e) => e.startsWith("lease:")), "no lease write or remove");
   const html = srAssertSingleFinal(t);
   assert.match(html, /다른 실행이 조회 중/);
-  assert.match(html, /실행 표시 종류 위젯/);
+  assert.match(html, /실행 표시 종류 앱/);
   assert.doesNotMatch(html, /모두 조회 실패|조회 오류|로그인 실패|조회 중 · /);
 });
 
@@ -3555,8 +3555,8 @@ test("display group: placeholder owning/providing library strings are unknown, n
 
 test("v1.2.6 title-display-1: display totals say 건; progressive guards preserved", async () => {
   const run = loadScript(TRACKER, createEnv().globals);
-  assert.equal(run("SCRIPT_VERSION"), "1.2.9");
-  assert.equal(run("NATIVE_PROBE_BUILD"), "single-render-1");
+  assert.equal(run("SCRIPT_VERSION"), "1.2.10");
+  assert.equal(run("NATIVE_PROBE_BUILD"), "app-preempts-widget-1");
   assert.equal(run("NATIVE_TRACE"), false);
   const t = setup();
   const html = t.run("buildHtmlPage")(await t.fetchAll());
@@ -4111,37 +4111,37 @@ function loadTrackerSource(src, globals) {
   return (expr) => vm.runInContext(expr, ctx);
 }
 
-test("single-render-1 release constants: 1.2.9 strictly newer than installed 1.2.8 and released 1.2.7, trace off", () => {
+test("app-preempts-widget-1 release constants: 1.2.10 strictly newer than installed 1.2.9 and released 1.2.8/1.2.7 (numeric, not string order), trace off", () => {
   const run = loadScript(TRACKER, createEnv().globals);
-  assert.equal(run("SCRIPT_VERSION"), "1.2.9");
-  assert.equal(run("NATIVE_PROBE_BUILD"), "single-render-1");
+  assert.equal(run("SCRIPT_VERSION"), "1.2.10");
+  assert.equal(run("NATIVE_PROBE_BUILD"), "app-preempts-widget-1");
   assert.equal(run("NATIVE_TRACE"), false);
   const newer = run("isNewerVersion");
-  for (const installed of ["1.2.8", "1.2.7"]) {
+  for (const installed of ["1.2.9", "1.2.8", "1.2.7"]) {
     assert.equal(newer(run("SCRIPT_VERSION"), installed), true, installed);
     assert.equal(newer(installed, run("SCRIPT_VERSION")), false, installed);
   }
   assert.equal(newer(run("SCRIPT_VERSION"), run("SCRIPT_VERSION")), false, "same version is never offered");
 });
 
-test("single-render-1 update path: the actual published source passes an installed 1.2.8 updater gate and is written byte-identically", async () => {
+test("app-preempts-widget-1 update path: the actual published source passes an installed 1.2.9 updater gate and is written byte-identically", async () => {
   const src = readFileSync(TRACKER, "utf8");
   assert.match(src, /\nawait main\(\);\s*\nScript\.complete\(\);\s*$/, "published artifact ends with the trailing entrypoint");
   const versions = [...src.matchAll(/const\s+SCRIPT_VERSION\s*=\s*["']([^"']+)["']/g)].map((m) => m[1]);
-  assert.deepEqual(versions, ["1.2.9"], "one version constant; legacy regex reads it");
+  assert.deepEqual(versions, ["1.2.10"], "one version constant; legacy regex reads it");
   assert.match(versions[0], /^\d+\.\d+\.\d+$/);
-  // 설치된 1.2.8 모델: 같은 업데이트 코드에 버전 상수만 1.2.8 (합성). 실제 원격 응답은 이 저장소의 실제 스크립트 본문.
+  // 설치된 1.2.9 모델: 같은 업데이트 코드에 버전 상수만 1.2.9 (합성). 실제 원격 응답은 이 저장소의 실제 스크립트 본문.
   const installedPath = "/local/Documents/songpa-loan-tracker.js";
-  const installedSrc = src.replace(/const SCRIPT_VERSION = "[^"]+";/, 'const SCRIPT_VERSION = "1.2.8";');
+  const installedSrc = src.replace(/const SCRIPT_VERSION = "[^"]+";/, 'const SCRIPT_VERSION = "1.2.9";');
   assert.notEqual(installedSrc, src);
   for (const runsInWidget of [false, true]) {
     const env = createEnv({ handler: async (req) => (req.url.startsWith(BASE) ? { throw: "library must not be contacted (synthetic)" } : { status: 200, body: src }), runsInWidget, files: { [installedPath]: installedSrc } });
     env.alertScript.push({ choice: 0 }, { choice: 0 });
     const run = loadTrackerSource(installedSrc, env.globals);
-    assert.equal(run("SCRIPT_VERSION"), "1.2.8");
+    assert.equal(run("SCRIPT_VERSION"), "1.2.9");
     const r = plain(await run("checkUpdateIfNeeded")());
     if (runsInWidget) {
-      assert.deepEqual(r, { hasUpdate: true, remoteVer: "1.2.9" });
+      assert.deepEqual(r, { hasUpdate: true, remoteVer: "1.2.10" });
       assert.equal(env.files.get(installedPath), installedSrc, "widget never writes");
     } else {
       assert.deepEqual(r, { updated: true });
@@ -4736,7 +4736,7 @@ async function lrUntil(cond, what) {
 }
 const lrBusySec = (text) => { const m = /약 (\d+)초/.exec(String(text || "")); return m ? Number(m[1]) : null; };
 
-test("lease recovery: a widget killed before finally leaves the original 270 s lease; the app respects it for its whole lifetime (no forced unlock) and recovers only after expiry", async () => {
+test("lease recovery (app-preempts-widget-1): a widget killed before finally leaves its 270 s lease; another widget still respects it, but a directly opened app takes it over at once", async () => {
   const widget = lrPeer({ runsInWidget: true, hold: true });
   widget.main(); // iOS 강제 종료 모델: 다시 진행되지 않으므로 finally가 돌지 않는다
   await lrUntil(() => widget.state.loanSeen, "widget is mid-collection");
@@ -4745,23 +4745,22 @@ test("lease recovery: a widget killed before finally leaves the original 270 s l
   assert.ok(ttl > 269000 && ttl <= 270000, `widget lease length ${ttl}`);
   assert.equal(JSON.parse(left).kind, "widget");
   assert.equal(JSON.parse(left).ttlMs, undefined, "withdrawn candidate field is not written");
+
+  // 위젯끼리는 기존 규칙 유지: 남은 표시를 존중하고 도서관에 요청하지 않는다
+  const nextWidget = lrPeer({ runsInWidget: true, files: widget.env.files });
+  await nextWidget.main();
+  assert.match(nextWidget.widget(), /⏳ 조회 보류/);
+  assert.equal(nextWidget.libRequests(), 0);
+  assert.equal(widget.env.files.get(LEASE), left, "widget never preempts a widget lease");
+
+  // 앱은 2초 뒤(실기기 화면의 '약 268초' 상황)에 열어도 기다리지 않고 바로 조회한다
   const app = lrPeer({ files: widget.env.files });
-  let skew = 0;
-  app.run("clock").now = () => Date.now() + skew;
-  for (skew of [30000, 61000, 200000]) {
-    await app.main();
-    const html = app.html();
-    assert.match(html, /다른 실행이 조회 중/, `skew ${skew}`);
-    const sec = lrBusySec(html);
-    assert.ok(sec >= 1 && sec <= 270 - Math.floor(skew / 1000), `skew ${skew}: ${sec}`);
-    assert.match(html, /실행 표시 종류 위젯/);
-    assert.equal(app.env.files.get(LEASE), left, `skew ${skew}: live widget lease untouched`);
-    assert.equal(app.libRequests(), 0);
-  }
-  skew = 271000;
+  app.run("clock").now = () => Date.now() + 2000;
   await app.main();
-  assert.ok(app.html().includes("A 책 1"), "abandoned widget lease expired only after 270 s and the app recovered");
-  assert.equal(app.env.files.has(LEASE), false);
+  const html = app.html();
+  assert.ok(html.includes("A 책 1") && html.includes("B 책 1"), "app took over the abandoned widget lease and queried all accounts");
+  assert.doesNotMatch(html, /다른 실행이 조회 중/);
+  assert.equal(app.env.files.has(LEASE), false, "app released its own lease; the stale widget lease is gone");
 });
 
 test("lease recovery: a legacy v1.2.8 270 s lease is respected for its full lifetime by app and widget, then recovers", async () => {
@@ -4809,20 +4808,23 @@ test("lease contention: app and widget processes sharing the local Library respe
   assert.ok(app.html().includes("A 책 1"));
   assert.equal(app.env.files.has(LEASE), false);
 
+  // app-preempts-widget-1: 위젯이 조회 중이어도 직접 연 앱은 표시를 넘겨받아 바로 조회한다
   const w2 = lrPeer({ runsInWidget: true, hold: true });
   const w2Run = w2.main();
   await lrUntil(() => w2.state.loanSeen, "widget holds the lease");
-  const wHeld = w2.env.files.get(LEASE);
   const a2 = lrPeer({ files: w2.env.files });
   await a2.main();
-  const sec = lrBusySec(a2.html());
-  assert.ok(sec > 200 && sec <= 270, String(sec));
-  assert.match(a2.html(), /실행 표시 종류 위젯/);
-  assert.doesNotMatch(a2.html(), /모두 조회 실패|조회 오류/);
-  assert.equal(w2.env.files.get(LEASE), wHeld);
+  assert.ok(a2.html().includes("A 책 1") && a2.html().includes("B 책 1"), "app did not wait for the widget");
+  assert.doesNotMatch(a2.html(), /다른 실행이 조회 중|모두 조회 실패|조회 오류/);
+  assert.equal(w2.env.files.has(LEASE), false, "app released its own lease");
+  const w2LoginsBefore = w2.env.log.requests.filter((r) => r.url.startsWith(LOGIN)).length;
+  assert.equal(w2LoginsBefore, 1, "widget was paused inside its first account");
   w2.open();
   await w2Run;
-  assert.match(w2.widget(), /A 책 1/);
+  // 넘겨받긴 위젯: 다음 계정 로그인을 시작하지 않고, 결과를 쓰지 않으며, 남의 표시를 지우지 않는다
+  assert.equal(w2.env.log.requests.filter((r) => r.url.startsWith(LOGIN)).length, 1, "preempted widget started no further account login");
+  assert.match(w2.widget(), /실행 표시\(잠금\)를 가져가/);
+  assert.doesNotMatch(w2.widget(), /[AB] 책 \d/);
   assert.equal(w2.env.files.has(LEASE), false);
 });
 
@@ -4940,8 +4942,8 @@ test("lease pause C1: a widget paused past the real 270 s expiry while an app ho
   assert.equal(wLease.expiresAt, T0 + 270000, "widget writes the original 270 s lease");
   assert.equal(wLease.kind, "widget");
 
-  clock.t = T0 + 269999; // 만료 1 ms 전: 아직 존중
-  const early = lsPeer({ lib, files, clock });
+  clock.t = T0 + 269999; // 만료 1 ms 전: 다른 위젯은 아직 존중 (앱은 app-preempts-widget-1부터 넘겨받으므로 위젯으로 확인)
+  const early = lsPeer({ lib, files, clock, runsInWidget: true });
   const skipped = plain(await early.run("collectData")([LS_A, LS_B]));
   assert.ok(skipped.every((r) => r.skipped === "busy" && r.retryAfterSec === 1 && r.leaseKind === "widget" && r.items.length === 0), JSON.stringify(skipped));
   assert.equal(early.libReqs().length, 0);

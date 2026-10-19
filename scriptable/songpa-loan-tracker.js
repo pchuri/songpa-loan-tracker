@@ -5,9 +5,9 @@
 // https://github.com/pchuri/songpa-loan-tracker (MIT License)
 // 계정은 songpa-accounts.js로 iOS 키체인에 저장한다. 이 파일에는 계정 정보를 넣지 않는다.
 
-const SCRIPT_VERSION = "1.2.9";
+const SCRIPT_VERSION = "1.2.10";
 const NATIVE_TRACE = false;
-const NATIVE_PROBE_BUILD = "single-render-1";
+const NATIVE_PROBE_BUILD = "app-preempts-widget-1";
 const UPDATE_URL = "https://raw.githubusercontent.com/pchuri/songpa-loan-tracker/main/scriptable/songpa-loan-tracker.js";
 const KEYCHAIN_KEY = "SPLIB_ACCOUNTS";
 // 자동 업데이트는 이 메인 스크립트만 바꾼다. 계정 설정 스크립트는 사용자가 직접 새 버전으로 교체해야 한다.
@@ -1849,7 +1849,7 @@ function quarantineCollisions(entries, verifiedSerialAccounts = null) {
 // 모든 계정을 순서대로 조회하고 계정 사이 충돌을 검사한다.
 // 첫 확인 회원번호는 모든 계정의 마지막 확인과 계정 간 충돌 검사(같은 회원번호·같은 세션)가 끝난 뒤,
 // 숨겨지지 않은 계정의 것만 한꺼번에 저장한다.
-async function fetchAllAccounts(accounts, budgetMs, deferBindingCommit = false, onProgress = null) {
+async function fetchAllAccounts(accounts, budgetMs, deferBindingCommit = false, onProgress = null, shouldContinue = null) {
   const globalDeadline = clock.now() + budgetMs;
   const snaps = accounts.map(snapshotAccount);
   const store = readVerifiedStore();
@@ -1865,7 +1865,15 @@ async function fetchAllAccounts(accounts, budgetMs, deferBindingCommit = false, 
     try { await onProgress({results:quarantineCollisions(entries,verifiedSerialAccounts),activeIndex}); } catch (_) {}
   };
   await publish(0);
+  let stopped = false;
   for (let i = 0; i < snaps.length; i++) {
+    // 실행 표시를 다른 실행(앱)이 가져갔으면 다음 계정 로그인을 시작하지 않는다. 남은 계정은 조회하지 않은 것으로 둔다.
+    if (!stopped && typeof shouldContinue === "function" && !shouldContinue()) stopped = true;
+    if (stopped) {
+      entries.push({ result: errorResult(snaps[i], "다른 실행이 실행 표시(잠금)를 가져가 이 계정은 조회하지 않았습니다."), observedIds: [], session: null, binding: null });
+      await publish(i+1);
+      continue;
+    }
     const m = expectations[i].memberId;
     if (m && counts.get(m) > 1) {
       entries.push({ result: errorResult(snaps[i], "설정 오류: 같은 회원번호가 다른 계정에도 등록되어 있습니다 (songpa-accounts에서 확인)"), observedIds: [], session: null, binding: null });
@@ -2144,8 +2152,12 @@ function acquireLease() {
         cur = null; // 깨진 파일은 만료된 것으로 본다
       }
       const live = cur && typeof cur.expiresAt === "number" && cur.expiresAt > now && cur.expiresAt <= now + LIMITS.leaseTtlMs * 2;
-      // 남은 시간은 표시가 만료될 때까지의 최대 시간일 뿐, 다른 실행이 살아 있다는 증거가 아니다. 표시는 지우거나 덮어쓰지 않는다.
-      if (live) return { status: "busy", remainingMs: cur.expiresAt - now, kind: leaseKindOf(cur) };
+      // 남은 시간은 표시가 만료될 때까지의 최대 시간일 뿐, 다른 실행이 살아 있다는 증거가 아니다.
+      // app-preempts-widget-1: 사용자가 직접 연 앱은 위젯이 남긴 표시를 넘겨받는다. 위젯(예산 25초)이 iOS에 종료되면
+      // finally가 돌지 않아 270초 표시가 남고 앱이 계속 막히기 때문이다. 넘겨받긴 위젯은 다음 계정 전에 멈추고 결과를 버린다.
+      // 앱·알 수 없음 표시와 위젯끼리는 기존처럼 지우거나 덮어쓰지 않는다.
+      const appPreemptsWidget = live && !config.runsInWidget && leaseKindOf(cur) === "widget";
+      if (live && !appPreemptsWidget) return { status: "busy", remainingMs: cur.expiresAt - now, kind: leaseKindOf(cur) };
     }
     const owner = `${now.toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
     fm.writeString(path, JSON.stringify({ owner, expiresAt: now + LIMITS.leaseTtlMs, kind: config.runsInWidget ? "widget" : "app" }));
@@ -2195,7 +2207,7 @@ async function collectData(accounts, onProgress = null) {
     }));
   }
   try {
-    const staged = await fetchAllAccounts(accounts, config.runsInWidget ? LIMITS.widgetBudgetMs : LIMITS.appBudgetMs, true, onProgress);
+    const staged = await fetchAllAccounts(accounts, config.runsInWidget ? LIMITS.widgetBudgetMs : LIMITS.appBudgetMs, true, onProgress, () => leaseStillHeld(lease));
     // 조회하는 동안 다른 실행이 표시를 가져갔으면(관측 가능한 경우) 이번 결과를 쓰지 않는다
     if (!leaseStillHeld(lease)) {
       return accounts.map(a => errorResult(a, "조회 중 다른 실행이 실행 표시(잠금)를 가져가 이번 결과를 버렸습니다. 잠시 후 다시 실행해주세요."));
