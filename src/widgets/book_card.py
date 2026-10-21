@@ -27,6 +27,7 @@ class BookCard(QFrame):
 
         tier, dday_label = compute_book_status(book)
         self.setProperty("tier", tier)
+        self.setProperty("pickup", tier == "pickup")
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(14, 12, 14, 12)
@@ -111,6 +112,8 @@ class BookCard(QFrame):
             return "🔴"
         if tier == "approaching":
             return "🟠"
-        if tier == "waiting":
-            return "📦"
+        if tier == "pickup":
+            return "🎁"
+        if tier == "transit":
+            return "🚚"
         return ""

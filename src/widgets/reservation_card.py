@@ -25,6 +25,7 @@ class ReservationCard(QFrame):
 
         tier, badge_label = compute_reservation_status(reservation)
         self.setProperty("tier", tier)
+        self.setProperty("pickup", is_ready_for_pickup(reservation))
 
         room = reservation.get("room") or ""
         if room:

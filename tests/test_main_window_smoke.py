@@ -617,3 +617,99 @@ def test_malformed_fields_show_recovery_warning_without_losing_bytes(qapp, tmp_p
         if window:
             window.close()
         loop.close()
+
+
+def _due_in(days):
+    from datetime import date, timedelta
+
+    return (date.today() + timedelta(days=days)).strftime("%Y.%m.%d")
+
+
+def test_pickup_and_transit_books_get_different_tiers_and_counts(window):
+    from src.book_status import compute_book_status
+
+    pickup = {"title": "도착한 책", "due_date": "입수", "is_interlibrary": True, "library": "거마"}
+    transit = {"title": "오는 중인 책", "due_date": "발송", "is_interlibrary": True, "library": "거마"}
+    overdue = {"title": "늦은 책", "due_date": _due_in(-1), "is_interlibrary": False, "library": "거마"}
+    assert compute_book_status(pickup) == ("pickup", "찾아가기")
+    assert compute_book_status(transit) == ("transit", "이동 중 · 발송")
+    assert compute_book_status(overdue)[0] == "urgent"
+
+    window._populate_cards([{"name": "사용자", "books": [pickup, transit, overdue], "reservations": []}])
+
+    counts = {item.tier: item._count_lbl.text() for item in window.summary_bar._items}
+    assert counts == {"urgent": "1", "approaching": "0", "pickup": "1", "transit": "1", "total": "3권"}
+    cards = [window.card_layout.itemAt(i).widget() for i in range(window.card_layout.count())]
+    by_title = {card.book["title"]: card for card in cards}
+    assert by_title["도착한 책"].property("pickup") is True
+    assert by_title["오는 중인 책"].property("pickup") is False
+    assert by_title["오는 중인 책"].property("tier") == "transit"
+
+
+def test_ready_reservation_card_is_highlighted_as_pickup(window):
+    window._populate_reservations([{
+        "name": "사용자", "books": [],
+        "reservations": [
+            _reservation("1", "도착 예약", "거마", 0, 0, expiry_date=_due_in(5)),
+            _reservation("2", "대기 예약", "거마", 2, 3),
+        ],
+    }])
+
+    cards = [window.reservation_layout.itemAt(i).widget() for i in range(window.reservation_layout.count())]
+    assert [(c.reservation["title"], c.property("pickup"), c.property("tier")) for c in cards] == [
+        ("도착 예약", True, "pickup"),
+        ("대기 예약", False, "normal"),
+    ]
+
+
+def test_saved_legacy_waiting_filter_is_dropped(qapp, tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    config_dir = tmp_path / ".songpa-loan-tracker"
+    config_dir.mkdir()
+    (config_dir / "config.json").write_text(json.dumps({"env": {}, "users": [], "ui_state": {"tier_filter": "waiting"}}))
+
+    from src.main_window import MainWindow
+
+    loop = asyncio.new_event_loop()
+    win = MainWindow(loop)
+    try:
+        assert win.tier_filter is None
+    finally:
+        win.close()
+        loop.close()
+
+
+def test_plan_tab_shows_report_and_copies_plain_text(window, qapp):
+    infos = [
+        {"name": "홍길동", "reservations": [], "books": [
+            {"title": "도착한 책", "due_date": "입수", "is_interlibrary": True, "library": "거마"},
+            {"title": "빌린 책", "due_date": _due_in(2), "is_interlibrary": False, "library": "거마"},
+        ]},
+        {"name": "user-id-123", "books": [], "reservations": [], "error": "실패"},
+    ]
+    assert window.tabs.tabText(window.tabs.indexOf(window.plan_tab)) == "반납·픽업"
+    assert not window.plan_copy_button.isEnabled()
+
+    window._populate_plan(infos)
+
+    text = window.plan_text.toPlainText()
+    assert "[거마도서관 반납]\n- 빌린 책 (길동, " in text
+    assert "[거마도서관 픽업]\n- 도착한 책 (길동, 상호대차)" in text
+    assert "user-id-123" not in text and "조회 실패 1개 계정" in text
+    window.plan_copy_button.click()
+    assert qapp.clipboard().text() == text
+    assert "복사했습니다" in window.plan_copy_status.text()
+
+
+def test_due_date_sort_puts_pickups_first_and_transit_last(window):
+    books = [
+        {"title": "오는 중", "due_date": "발송", "is_interlibrary": True, "library": "거마"},
+        {"title": "나중 반납", "due_date": _due_in(9), "is_interlibrary": False, "library": "거마"},
+        {"title": "도착", "due_date": "입수", "is_interlibrary": True, "library": "거마"},
+        {"title": "곧 반납", "due_date": _due_in(1), "is_interlibrary": False, "library": "거마"},
+    ]
+    window.sort_combo.setCurrentText("반납일")
+
+    pairs = window._flatten_and_sort([{"name": "사용자", "books": books, "reservations": []}])
+
+    assert [b["title"] for _, b in pairs] == ["도착", "곧 반납", "나중 반납", "오는 중"]

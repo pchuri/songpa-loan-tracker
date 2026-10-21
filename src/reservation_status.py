@@ -26,7 +26,10 @@ def is_ready_for_pickup(reservation: dict) -> bool:
 
 
 def compute_reservation_status(reservation: dict) -> tuple[str, str]:
-    """예약 건 → (tier, 배지 라벨). tier ∈ {urgent, approaching, normal}."""
+    """예약 건 → (tier, 배지 라벨). tier ∈ {urgent, pickup, approaching, normal}.
+
+    수령 대기는 상호대차 입수와 같은 pickup 색을 쓴다. 마감이 하루 이내면 urgent로 올린다.
+    """
     expiry = reservation.get("expiry_date")
     if expiry:
         try:
@@ -39,7 +42,7 @@ def compute_reservation_status(reservation: dict) -> tuple[str, str]:
             return "urgent", "수령 D-Day"
         if days <= 1:
             return "urgent", f"수령 D-{days}"
-        return "approaching", f"수령 D-{days}"
+        return "pickup", f"수령 D-{days}"
 
     rank = reservation.get("rank") or 0
     if rank == 1:

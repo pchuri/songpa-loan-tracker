@@ -35,6 +35,8 @@ def _status_parser() -> argparse.ArgumentParser:
     out.add_argument("--json", action="store_true", help="JSON으로 출력 (스크립트·AI용)")
     out.add_argument("--html", action="store_true", help="카드 화면 HTML을 만들어 브라우저로 열기")
     out.add_argument("--notify", action="store_true", help="안드로이드 Termux 알림으로 보내기")
+    out.add_argument("--plan", action="store_true",
+                     help="도서관별 반납·픽업 리포트 (카톡에 붙여넣기 좋은 글)")
     p.add_argument("--due-soon", type=int, default=3, metavar="일",
                    help="반납 임박으로 볼 남은 날 수 (기본 3)")
     p.add_argument("--no-open", action="store_true", help="--html에서 파일만 만들고 열지 않기")
@@ -144,6 +146,11 @@ def run_status(argv: list[str], store: AccountStore) -> int:
         path = write_html(report, args.due_soon, args.output)
         if args.no_open or not open_html(path):
             print(f"HTML 저장: {path}")
+    elif args.plan:
+        from songpa_cli.plan import build_plan, format_plan_text
+        from songpa_cli.text import clean
+
+        print("\n".join(clean(line) for line in format_plan_text(build_plan(report)).splitlines()))
     elif args.notify:
         from songpa_cli.notify import build_notification, send_notification
         from songpa_cli.text import clean
