@@ -12,7 +12,7 @@ def build_font_rule() -> str:
 
 
 LIGHT_STYLESHEET = """
-#StatusPage, #ReservationPage { background-color: #f8fafc; }
+#StatusPage, #ReservationPage, #PlanPage { background-color: #f8fafc; }
 
 #SummaryBar {
     background-color: #ffffff;
@@ -33,7 +33,8 @@ LIGHT_STYLESHEET = """
 #SummaryCount { font-size: 16px; font-weight: 600; }
 #SummaryCount[tier="urgent"]      { color: #dc2626; }
 #SummaryCount[tier="approaching"] { color: #d97706; }
-#SummaryCount[tier="waiting"]     { color: #2563eb; }
+#SummaryCount[tier="pickup"]      { color: #7c3aed; }
+#SummaryCount[tier="transit"]     { color: #64748b; }
 #SummaryCount[tier="total"]       { color: #1e293b; }
 
 #BookCard, #ReservationCard {
@@ -42,6 +43,18 @@ LIGHT_STYLESHEET = """
     border-radius: 10px;
 }
 #BookCard:hover, #ReservationCard:hover { border: 1px solid #cbd5e1; }
+/* 찾아갈 책(상호대차 입수·예약 도착)은 보라 테두리로 띄우고, 이동 중은 점선·흐린 글자로 가라앉힌다.
+   연체·임박(빨강·주황)이나 보통(초록)과 겹치지 않는 색만 쓴다. */
+#BookCard[pickup="true"], #ReservationCard[pickup="true"] {
+    background-color: #faf5ff;
+    border: 2px solid #8b5cf6;
+}
+#BookCard[pickup="true"]:hover, #ReservationCard[pickup="true"]:hover { border: 2px solid #7c3aed; }
+#BookCard[tier="transit"] {
+    background-color: #f8fafc;
+    border: 1px dashed #cbd5e1;
+}
+#BookCard[tier="transit"] #CardTitle { color: #64748b; }
 
 #DdayBadge {
     padding: 3px 10px;
@@ -52,7 +65,8 @@ LIGHT_STYLESHEET = """
 }
 #DdayBadge[tier="urgent"]      { background-color: #fee2e2; color: #dc2626; }
 #DdayBadge[tier="approaching"] { background-color: #fef3c7; color: #d97706; }
-#DdayBadge[tier="waiting"]     { background-color: #dbeafe; color: #2563eb; }
+#DdayBadge[tier="pickup"]      { background-color: #7c3aed; color: #ffffff; }
+#DdayBadge[tier="transit"]     { background-color: #f1f5f9; color: #64748b; font-weight: 500; }
 #DdayBadge[tier="normal"]      { background-color: #d1fae5; color: #059669; }
 
 #CardTitle { font-size: 14px; font-weight: 600; color: #1e293b; }
@@ -97,6 +111,14 @@ LIGHT_STYLESHEET = """
 
 #CardScroll, #CardContainer { background-color: transparent; border: none; }
 #LastUpdatedLabel { color: #64748b; font-size: 12px; }
+#PlanText {
+    background-color: #ffffff;
+    color: #1e293b;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    padding: 10px;
+    font-size: 14px;
+}
 #EmptyMessage { color: #94a3b8; font-size: 14px; padding: 40px 10px 4px 10px; }
 """
 
@@ -133,7 +155,7 @@ QCheckBox { color: #e2e8f0; }
    라벨은 부모 배경을 그대로 보이게 한다. #DdayBadge처럼 ID로 색을 준 라벨은 그 규칙이 이긴다. */
 QLabel { color: #e2e8f0; background-color: transparent; }
 
-#StatusPage, #ReservationPage { background-color: #0f1115; }
+#StatusPage, #ReservationPage, #PlanPage { background-color: #0f1115; }
 
 #SummaryBar {
     background-color: #1a1d23;
@@ -154,7 +176,8 @@ QLabel { color: #e2e8f0; background-color: transparent; }
 #SummaryCount { font-size: 16px; font-weight: 600; }
 #SummaryCount[tier="urgent"]      { color: #fca5a5; }
 #SummaryCount[tier="approaching"] { color: #fcd34d; }
-#SummaryCount[tier="waiting"]     { color: #93c5fd; }
+#SummaryCount[tier="pickup"]      { color: #c4b5fd; }
+#SummaryCount[tier="transit"]     { color: #94a3b8; }
 #SummaryCount[tier="total"]       { color: #e2e8f0; }
 
 #BookCard, #ReservationCard {
@@ -163,6 +186,16 @@ QLabel { color: #e2e8f0; background-color: transparent; }
     border-radius: 10px;
 }
 #BookCard:hover, #ReservationCard:hover { border: 1px solid #475569; }
+#BookCard[pickup="true"], #ReservationCard[pickup="true"] {
+    background-color: #221a33;
+    border: 2px solid #8b5cf6;
+}
+#BookCard[pickup="true"]:hover, #ReservationCard[pickup="true"]:hover { border: 2px solid #a78bfa; }
+#BookCard[tier="transit"] {
+    background-color: #13161b;
+    border: 1px dashed #3a414d;
+}
+#BookCard[tier="transit"] #CardTitle { color: #94a3b8; }
 
 #DdayBadge {
     padding: 3px 10px;
@@ -173,7 +206,8 @@ QLabel { color: #e2e8f0; background-color: transparent; }
 }
 #DdayBadge[tier="urgent"]      { background-color: #3b1418; color: #fca5a5; }
 #DdayBadge[tier="approaching"] { background-color: #3a2a0a; color: #fcd34d; }
-#DdayBadge[tier="waiting"]     { background-color: #102a4c; color: #93c5fd; }
+#DdayBadge[tier="pickup"]      { background-color: #7c3aed; color: #ffffff; }
+#DdayBadge[tier="transit"]     { background-color: #1f242c; color: #94a3b8; font-weight: 500; }
 #DdayBadge[tier="normal"]      { background-color: #0f2e24; color: #6ee7b7; }
 
 #CardTitle { font-size: 14px; font-weight: 600; color: #e2e8f0; }
@@ -218,6 +252,14 @@ QLabel { color: #e2e8f0; background-color: transparent; }
 
 #CardScroll, #CardContainer { background-color: transparent; border: none; }
 #LastUpdatedLabel { color: #94a3b8; font-size: 12px; }
+#PlanText {
+    background-color: #1a1d23;
+    color: #e2e8f0;
+    border: 1px solid #2a2f38;
+    border-radius: 8px;
+    padding: 10px;
+    font-size: 14px;
+}
 #EmptyMessage { color: #64748b; font-size: 14px; padding: 40px 10px 4px 10px; }
 
 QHeaderView::section {

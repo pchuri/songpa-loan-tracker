@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMenu,
     QMessageBox,
+    QPlainTextEdit,
     QPushButton,
     QScrollArea,
     QTabWidget,
@@ -28,12 +29,24 @@ from PySide6.QtWidgets import (
 )
 from qasync import asyncSlot
 
+from songpa_cli.plan import build_plan, format_plan_text
+from songpa_cli.report import build_report, short_name
 from songpa_core.splib import get_infos_async
 from src.book_status import compute_book_status
 from src.config_store import ConfigReadError, ConfigStore, _env_section
 from src.reservation_status import compute_reservation_status, group_key, is_ready_for_pickup
 from src.styles import DARK_STYLESHEET, LIGHT_STYLESHEET, build_font_rule
 from src.widgets import BookCard, FlowLayout, ReservationCard, SummaryBar, UserFilterBar
+
+
+def build_plan_text(infos, now: datetime | None = None) -> str:
+    """조회 결과 → 카톡용 반납·픽업 리포트.
+
+    데스크톱 계정에는 label이 없어 사이트의 이름을 짧게 줄여(홍길동 → 길동) 쓴다.
+    실패한 계정의 name 자리에는 회원번호가 들어 있으니 이름 없이 건수만 남긴다.
+    """
+    credentials = [{"label": short_name(entry.get("name") or "?")} for entry in (infos or [])]
+    return format_plan_text(build_plan(build_report(credentials, infos or [], now=now)))
 
 
 def _all_failed(infos) -> bool:
@@ -115,6 +128,9 @@ class MainWindow(QMainWindow):
         self._saved_user_selection = ui_state.get("selected_user")
         self._pending_user_selection = self._saved_user_selection
         self.tier_filter = ui_state.get("tier_filter")
+        if self.tier_filter not in SummaryBar.FILTER_TIERS:
+            # 예전 버전의 "waiting"(입수·발송 합친 칸)처럼 없어진 칸이면 필터를 푼다.
+            self.tier_filter = None
         self._initial_reservation_sort_key = ui_state.get("reservation_sort_key", "책별")
         self._saved_reservation_user_selection = ui_state.get("reservation_selected_user")
         self._pending_reservation_user_selection = self._saved_reservation_user_selection
@@ -126,10 +142,12 @@ class MainWindow(QMainWindow):
         self.tabs = QTabWidget()
         self.status_tab = self._build_status_tab()
         self.reservation_tab = self._build_reservation_tab()
+        self.plan_tab = self._build_plan_tab()
         self.settings_tab = self._build_settings_tab()
 
         self.tabs.addTab(self.status_tab, "대출 현황")
         self.tabs.addTab(self.reservation_tab, "예약 현황")
+        self.tabs.addTab(self.plan_tab, "반납·픽업")
         self.tabs.addTab(self.settings_tab, "설정")
 
         container = QWidget()
@@ -265,6 +283,8 @@ class MainWindow(QMainWindow):
         tab2_shortcut.activated.connect(lambda: self.tabs.setCurrentIndex(1))
         tab3_shortcut = QShortcut(QKeySequence("Ctrl+3"), self)
         tab3_shortcut.activated.connect(lambda: self.tabs.setCurrentIndex(2))
+        tab4_shortcut = QShortcut(QKeySequence("Ctrl+4"), self)
+        tab4_shortcut.activated.connect(lambda: self.tabs.setCurrentIndex(3))
 
     def _normalize_users(self, users: list[dict]) -> list[dict]:
         normalized = []
@@ -435,6 +455,50 @@ class MainWindow(QMainWindow):
 
         return page
 
+    def _build_plan_tab(self) -> QWidget:
+        """도서관별로 어디서 무엇을 찾고 어디에 무엇을 반납할지. 보이는 글 그대로 복사된다."""
+        page = QWidget()
+        page.setObjectName("PlanPage")
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(16, 12, 16, 12)
+        layout.setSpacing(12)
+
+        layout.addLayout(self._build_header_row())
+
+        self.plan_text = QPlainTextEdit()
+        self.plan_text.setObjectName("PlanText")
+        self.plan_text.setReadOnly(True)
+        self.plan_text.setPlaceholderText("새로고침하면 도서관별 반납·픽업 목록이 여기에 나옵니다.")
+        layout.addWidget(self.plan_text, 1)
+
+        row = QHBoxLayout()
+        self.plan_copy_status = QLabel("")
+        self.plan_copy_status.setObjectName("LastUpdatedLabel")
+        row.addWidget(self.plan_copy_status)
+        row.addStretch(1)
+        self.plan_copy_button = QPushButton("📋  카톡용 복사")
+        self.plan_copy_button.setObjectName("RefreshButton")
+        self.plan_copy_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.plan_copy_button.setEnabled(False)
+        self.plan_copy_button.clicked.connect(self._copy_plan_text)
+        row.addWidget(self.plan_copy_button)
+        layout.addLayout(row)
+        return page
+
+    def _populate_plan(self, infos):
+        if _all_failed(infos):
+            self.plan_text.setPlainText("")
+            self.plan_text.setPlaceholderText("⚠️  조회에 실패했습니다")
+            self.plan_copy_button.setEnabled(False)
+            return
+        self.plan_text.setPlainText(build_plan_text(infos))
+        self.plan_copy_button.setEnabled(True)
+        self.plan_copy_status.setText("")
+
+    def _copy_plan_text(self):
+        QApplication.clipboard().setText(self.plan_text.toPlainText())
+        self.plan_copy_status.setText("복사했습니다. 카톡에 붙여넣으세요.")
+
     def _build_settings_tab(self) -> QWidget:
         page = QWidget()
         layout = QVBoxLayout(page)
@@ -519,8 +583,9 @@ class MainWindow(QMainWindow):
         self._set_refresh_enabled(False)
         self._clear_cards()
         self._clear_reservation_cards()
-        self.summary_bar.update_counts(0, 0, 0, 0)
+        self.summary_bar.update_counts(0, 0, 0, 0, 0)
         self._update_incomplete_notice(None)
+        self.plan_copy_button.setEnabled(False)
         self.empty_message.setText("📚  불러오는 중...")
         self.clear_filters_button.hide()
         self.empty_state.show()
@@ -533,6 +598,7 @@ class MainWindow(QMainWindow):
             self.last_infos = infos
             self._populate_cards(infos)
             self._populate_reservations(infos)
+            self._populate_plan(infos)
             failed = [info for info in infos if info.get("error")]
             if failed and len(failed) == len(infos):
                 # 계정마다 같은 원인이면 한 줄로 접힌다. "네트워크 또는 인증" 같은
@@ -569,7 +635,9 @@ class MainWindow(QMainWindow):
         if self.last_infos:
             self._populate_cards(self.last_infos)
             self._populate_reservations(self.last_infos)
+            self._populate_plan(self.last_infos)
             return
+        self.plan_text.setPlaceholderText("⚠️  조회에 실패했습니다")
         for message, button, state in (
             (self.empty_message, self.clear_filters_button, self.empty_state),
             (self.reservation_empty_message, self.reservation_clear_button, self.reservation_empty_state),
@@ -616,20 +684,17 @@ class MainWindow(QMainWindow):
             self._pending_user_selection = None
         self._suppress_state_save = False
 
-        urgent = approaching = waiting = total = 0
+        tier_counts = defaultdict(int)
+        total = 0
         for entry in (infos or []):
             for book in entry.get("books", []):
                 tier, _ = compute_book_status(book)
                 total += 1
-                if tier == "urgent":
-                    urgent += 1
-                elif tier == "approaching":
-                    approaching += 1
-                elif tier == "waiting":
-                    waiting += 1
+                tier_counts[tier] += 1
         failed_accounts, partial_accounts = _incomplete_accounts(infos)
         self.summary_bar.update_counts(
-            urgent, approaching, waiting, total, incomplete=bool(failed_accounts or partial_accounts)
+            tier_counts["urgent"], tier_counts["approaching"], tier_counts["pickup"], tier_counts["transit"], total,
+            incomplete=bool(failed_accounts or partial_accounts),
         )
         self.summary_bar.set_checked_tier(self.tier_filter)
         self._update_incomplete_notice(infos)
@@ -689,7 +754,12 @@ class MainWindow(QMainWindow):
                 return datetime.max
 
         if sort_key == "반납일":
-            pairs.sort(key=lambda p: parse_due(p[1].get("due_date", "")))
+            # 찾아갈 책은 맨 앞, 아직 못 찾는 이동 중은 맨 뒤. 둘 다 반납일이 없어 예전엔 함께 끝에 섞였다.
+            tier_order = {"pickup": 0, "transit": 2}
+            pairs.sort(key=lambda p: (
+                tier_order.get(compute_book_status(p[1])[0], 1),
+                parse_due(p[1].get("due_date", "")),
+            ))
         elif sort_key == "도서관":
             pairs.sort(key=lambda p: (p[1].get("library") or p[1].get("receiving_library") or "").strip())
         else:
@@ -916,8 +986,11 @@ class MainWindow(QMainWindow):
 
     @staticmethod
     def _book_detail_fields(book: dict) -> list:
+        tier, badge = compute_book_status(book)
+        state = {"pickup": "찾아갈 책 (수령관 도착)", "transit": f"이동 중 · {book.get('due_date', '')} (아직 못 찾음)"}
         fields = [
             ("제목", book.get("title", "")),
+            ("상태", state.get(tier, badge)),
             ("도서관", book.get("library") or book.get("receiving_library", "")),
             ("반납일", book.get("due_date", "")),
             ("상호대차", "예" if book.get("is_interlibrary") else "아니오"),

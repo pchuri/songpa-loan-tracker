@@ -147,7 +147,7 @@ def test_pickup_deadline_drives_the_tier():
     assert compute_reservation_status({"expiry_date": _in_days(-1)}) == ("urgent", "만기 경과")
     assert compute_reservation_status({"expiry_date": _in_days(0)}) == ("urgent", "수령 D-Day")
     assert compute_reservation_status({"expiry_date": _in_days(1)}) == ("urgent", "수령 D-1")
-    assert compute_reservation_status({"expiry_date": _in_days(3)}) == ("approaching", "수령 D-3")
+    assert compute_reservation_status({"expiry_date": _in_days(3)}) == ("pickup", "수령 D-3")
 
 
 def test_rank_drives_the_tier_when_not_ready_for_pickup():

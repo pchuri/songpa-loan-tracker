@@ -65,6 +65,7 @@ class SummaryItem(QFrame):
 
 class SummaryBar(QFrame):
     tierClicked = Signal(str)
+    FILTER_TIERS = (None, "urgent", "approaching", "pickup", "transit")
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -77,7 +78,8 @@ class SummaryBar(QFrame):
         for icon, label, tier in [
             ("🔴", "긴급", "urgent"),
             ("🟠", "임박", "approaching"),
-            ("📦", "대기", "waiting"),
+            ("🎁", "찾아갈 책", "pickup"),
+            ("🚚", "이동 중", "transit"),
         ]:
             item = SummaryItem(icon, label, tier, interactive=True)
             item.clicked.connect(self.tierClicked.emit)
@@ -91,9 +93,11 @@ class SummaryBar(QFrame):
         layout.addWidget(total_item)
         self._items.append(total_item)
 
-    def update_counts(self, urgent: int, approaching: int, waiting: int, total: int, incomplete: bool = False):
+    def update_counts(self, urgent: int, approaching: int, pickup: int, transit: int, total: int,
+                      incomplete: bool = False):
         """incomplete=True: 일부 계정이 partial이거나 실패해 모든 숫자가 하한일 뿐이다."""
-        counts = {"urgent": urgent, "approaching": approaching, "waiting": waiting, "total": total}
+        counts = {"urgent": urgent, "approaching": approaching, "pickup": pickup, "transit": transit,
+                  "total": total}
         for item in self._items:
             item.set_count(counts.get(item.tier, 0), incomplete=incomplete)
 
