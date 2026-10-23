@@ -66,7 +66,7 @@ LIGHT_STYLESHEET = """
 #DdayBadge[tier="urgent"]      { background-color: #fee2e2; color: #dc2626; }
 #DdayBadge[tier="approaching"] { background-color: #fef3c7; color: #d97706; }
 #DdayBadge[tier="pickup"]      { background-color: #7c3aed; color: #ffffff; }
-#DdayBadge[tier="transit"]     { background-color: #f1f5f9; color: #64748b; font-weight: 500; }
+#DdayBadge[tier="transit"]     { background-color: transparent; color: #64748b; font-weight: 500; }
 #DdayBadge[tier="normal"]      { background-color: #d1fae5; color: #059669; }
 
 #CardTitle { font-size: 14px; font-weight: 600; color: #1e293b; }
@@ -207,7 +207,7 @@ QLabel { color: #e2e8f0; background-color: transparent; }
 #DdayBadge[tier="urgent"]      { background-color: #3b1418; color: #fca5a5; }
 #DdayBadge[tier="approaching"] { background-color: #3a2a0a; color: #fcd34d; }
 #DdayBadge[tier="pickup"]      { background-color: #7c3aed; color: #ffffff; }
-#DdayBadge[tier="transit"]     { background-color: #1f242c; color: #94a3b8; font-weight: 500; }
+#DdayBadge[tier="transit"]     { background-color: transparent; color: #94a3b8; font-weight: 500; }
 #DdayBadge[tier="normal"]      { background-color: #0f2e24; color: #6ee7b7; }
 
 #CardTitle { font-size: 14px; font-weight: 600; color: #e2e8f0; }
